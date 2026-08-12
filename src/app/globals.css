@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+:root {
+  --background: #050b18;
+  --foreground: #e8eef9;
+  --surface: #0b162b;
+  --surface-2: #12203a;
+  --border: #1e3358;
+  --muted: #9fb0cc;
+  --blue: #3b82f6;
+  --blue-bright: #60a5fa;
+  --neon: #e8ff4d;
+  --neon-dim: #c4d93a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-blue: var(--blue);
+  --color-blue-bright: var(--blue-bright);
+  --color-neon: var(--neon);
+  --color-neon-dim: var(--neon-dim);
+  --font-sans: var(--font-overpass);
+  --font-mono: var(--font-fira-mono);
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(59, 130, 246, 0.22), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(232, 255, 77, 0.08), transparent 50%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-overpass), ui-sans-serif, system-ui, sans-serif;
+  min-height: 100%;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: rgba(232, 255, 77, 0.35);
+  color: #050b18;
+}
+
+.starfield {
+  background-image:
+    radial-gradient(1px 1px at 20px 30px, rgba(255, 255, 255, 0.55), transparent),
+    radial-gradient(1px 1px at 80px 120px, rgba(255, 255, 255, 0.35), transparent),
+    radial-gradient(1.5px 1.5px at 160px 80px, rgba(255, 255, 255, 0.45), transparent),
+    radial-gradient(1px 1px at 240px 160px, rgba(255, 255, 255, 0.3), transparent),
+    radial-gradient(1px 1px at 320px 40px, rgba(255, 255, 255, 0.4), transparent);
+  background-size: 360px 200px;
+}
