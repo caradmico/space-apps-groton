@@ -41,8 +41,8 @@ export default function SchedulePage() {
       <h1 className="text-3xl font-bold tracking-tight">Family-hours schedule</h1>
       <p className="mt-3 max-w-2xl text-muted">
         In-room hours, not a 48-hour lock-in. SUBASE Groton, building TBD.
-        Access is not a public walk-up — ID and any sponsor/visitor process
-        apply. Virtual door stays open on this same Local Event.
+        For people already on base or already allowed on. Not a public
+        walk-up. Virtual is for that same circle if they cannot make the room.
       </p>
       <div className="mt-8 grid gap-6">
         <Agenda title="Saturday Nov 14 · 09:00–17:00" rows={day1} />

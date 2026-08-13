@@ -15,10 +15,11 @@ export default function HomePage() {
           NASA Space Apps Challenge
         </h1>
         <p className="mt-4 max-w-2xl text-lg text-muted">
-          November 14–15, 2026. On-base Groton, building TBD — not a public
-          walk-up. Free local event for sailors, families, students, and
-          civilians who complete base access, plus a virtual door if you
-          cannot get on SUBASE. No coding required.
+          November 14–15, 2026. On-base Groton, building TBD. For sailors,
+          navy family, students already here, and navy-adjacent people with
+          access (Electric Boat and similar). Not a public walk-up. Going
+          off base is hard — so the hackathon comes to SUBASE. No coding
+          required.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
           <a
@@ -39,7 +40,7 @@ export default function HomePage() {
         <dl className="mt-12 grid gap-4 sm:grid-cols-3">
           {[
             ["When", "Sat Nov 14 · 09:00–17:00 · Sun Nov 15 · 12:00–17:00"],
-            ["Where", "SUBASE Groton · building TBD · ID + access process"],
+            ["Where", "SUBASE Groton · building TBD · already-allowed access"],
             ["Challenges", "Summaries Sep 17 · full statements Oct 28"],
           ].map(([k, v]) => (
             <div
@@ -54,10 +55,11 @@ export default function HomePage() {
           ))}
         </dl>
         <div className="mt-8 max-w-2xl rounded-xl border border-border bg-surface/70 px-5 py-4 text-sm text-muted">
-          Access is not walk-up public. Bring a laptop, charger, CAC or
-          government ID, and a water bottle. Under-18s need a parent or
-          guardian registered and on-site. Local Collaborators: USO and MWR.
-          This local event is not NASA-funded.
+          If you already belong on SUBASE, you belong in this room. Other
+          interested people: case by case. If Groton isn&apos;t the fit, use
+          the Space Apps Universal Event. Bring a laptop, charger, CAC or
+          ID, water bottle. Under-18s need a parent or guardian registered
+          and on-site. Local Collaborators: USO and MWR. Not NASA-funded.
         </div>
         <SponsorStrip />
       </section>
