@@ -3,20 +3,20 @@ import type { Metadata } from "next";
 export const metadata: Metadata = { title: "Schedule" };
 
 const day1 = [
-  ["08:00–09:00", "Organizers arrive · tech check (event cannot start before 9:00 AM local)"],
-  ["09:00", "Welcome · schedule · logistics"],
-  ["~09:30", "Mentor / teammate briefing"],
-  ["Morning", "Hacking begins"],
-  ["Midday", "Lunch break"],
-  ["Afternoon–evening", "Hacking continues · optional progress check-ins"],
-  ["Evening", "Dinner break · optional day-1 debrief"],
+  ["09:00", "Doors · welcome · access / logistics"],
+  ["09:30", "Team formation · no coding required"],
+  ["10:00–12:00", "Hacking"],
+  ["12:00–13:00", "Lunch break (plan TBD — do not assume meals provided)"],
+  ["13:00–16:00", "Hacking · optional NASA-data clinic ~14:00"],
+  ["16:00–17:00", "Day-1 wrap · optional evening work off-site for duty-free adults"],
 ];
 
 const day2 = [
-  ["Morning", "Group check-in · hacking resumes"],
-  ["Midday", "Lunch break"],
-  ["16:00–19:30", "Optional: local judging / pitches / awards (not required)"],
-  ["Until 23:59", "Final project submit on Space Apps portal"],
+  ["12:00", "Doors · check-in · hacking resumes"],
+  ["12:30–15:00", "Hacking · demo/submit clinic ~13:00"],
+  ["15:00–16:30", "Optional local pitches (not required for Global)"],
+  ["16:30–17:00", "Submit-together block — Project tab → public demo → Submit for Judging"],
+  ["Until 23:59", "Final Submit for Judging on the Space Apps portal"],
 ];
 
 function Agenda({ title, rows }: { title: string; rows: string[][] }) {
@@ -38,14 +38,15 @@ function Agenda({ title, rows }: { title: string; rows: string[][] }) {
 export default function SchedulePage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
-      <h1 className="text-3xl font-bold tracking-tight">Sample schedule</h1>
+      <h1 className="text-3xl font-bold tracking-tight">Family-hours schedule</h1>
       <p className="mt-3 max-w-2xl text-muted">
-        Sample agenda from Local Lead training. Final Groton times TBD. Local
-        judging and pitch sessions are optional.
+        In-room hours, not a 48-hour lock-in. SUBASE Groton, building TBD.
+        Access is not a public walk-up — ID and any sponsor/visitor process
+        apply. Virtual door stays open on this same Local Event.
       </p>
       <div className="mt-8 grid gap-6">
-        <Agenda title="Day 1 — Saturday Nov 14" rows={day1} />
-        <Agenda title="Day 2 — Sunday Nov 15" rows={day2} />
+        <Agenda title="Saturday Nov 14 · 09:00–17:00" rows={day1} />
+        <Agenda title="Sunday Nov 15 · 12:00–17:00" rows={day2} />
       </div>
     </div>
   );

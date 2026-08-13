@@ -9,15 +9,16 @@ export default function HomePage() {
     <div className="starfield">
       <section className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neon">
-          Local event · Groton
+          Local event · Groton / SUBASE New London
         </p>
         <h1 className="mt-3 max-w-3xl text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
           NASA Space Apps Challenge
         </h1>
         <p className="mt-4 max-w-2xl text-lg text-muted">
-          November 14–15, 2026 · Venue TBD (on-base Groton). A weekend
-          hackathon using open NASA data to solve real Earth and space
-          challenges — all ages and skill levels welcome.
+          November 14–15, 2026. On-base Groton, building TBD — not a public
+          walk-up. Free local event for sailors, families, students, and
+          civilians who complete base access, plus a virtual door if you
+          cannot get on SUBASE. No coding required.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
           <a
@@ -26,19 +27,19 @@ export default function HomePage() {
             rel="noopener noreferrer"
             className="inline-flex items-center justify-center rounded-full bg-neon px-6 py-3 text-sm font-bold text-background hover:bg-neon-dim focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neon"
           >
-            Register on Space Apps
+            Register on Space Apps (opens Aug 26)
           </a>
           <Link
-            href="/volunteers"
+            href="/schedule"
             className="inline-flex items-center justify-center rounded-full border border-border bg-surface px-6 py-3 text-sm font-semibold text-foreground hover:border-blue-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neon"
           >
-            Volunteer (low-lift roles)
+            Family-hours schedule
           </Link>
         </div>
         <dl className="mt-12 grid gap-4 sm:grid-cols-3">
           {[
-            ["When", "Nov 14–15, 2026 · starts ≥ 9:00 AM local"],
-            ["Where", "On-base Groton · exact venue TBD"],
+            ["When", "Sat Nov 14 · 09:00–17:00 · Sun Nov 15 · 12:00–17:00"],
+            ["Where", "SUBASE Groton · building TBD · ID + access process"],
             ["Challenges", "Summaries Sep 17 · full statements Oct 28"],
           ].map(([k, v]) => (
             <div
@@ -52,6 +53,12 @@ export default function HomePage() {
             </div>
           ))}
         </dl>
+        <div className="mt-8 max-w-2xl rounded-xl border border-border bg-surface/70 px-5 py-4 text-sm text-muted">
+          Access is not walk-up public. Bring a laptop, charger, CAC or
+          government ID, and a water bottle. Under-18s need a parent or
+          guardian registered and on-site. Local Collaborators: USO and MWR.
+          This local event is not NASA-funded.
+        </div>
         <SponsorStrip />
       </section>
     </div>
