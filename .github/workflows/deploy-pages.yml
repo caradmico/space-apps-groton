@@ -1,0 +1,47 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      # Deploy this Path A branch so /resources is public before merge.
+      - cursor/github-pages-resources-c888
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build with Next.js
+        run: npm run build
+        env:
+          PAGES_BASE_PATH: /space-apps-groton
+
+      - name: Bypass Jekyll on GitHub Pages
+        run: touch out/.nojekyll
+
+      - name: Publish to gh-pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: out
+          branch: gh-pages
+          clean: true
