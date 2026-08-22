@@ -12,11 +12,11 @@ WIP. Fun lane: after a mill exam ship, or weekend. Do not open as empty-cycle fi
 
 ## Public site ($0)
 
-GitHub Pages (static export): https://caradmico.github.io/space-apps-groton/
+**Resources (Star Visualizer first):** https://caradmico.github.io/space-apps-groton/resources/
 
-Resources (Star Visualizer first): https://caradmico.github.io/space-apps-groton/resources/
+That URL is live for a logged-out stranger. Star Visualizer stays on `https://staris-b01f2.firebaseapp.com/`.
 
-First-time only (free on this public repo): **Settings → Pages → Deploy from a branch → `gh-pages` / (root)**. Actions republishes `gh-pages` on push to `main`.
+This repo also static-exports to the `gh-pages` branch. To serve the full Next.js export from the same host, one free toggle: **Settings → Pages → Deploy from a branch → `gh-pages` / (root)**.
 
 ## Stack
 
