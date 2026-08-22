@@ -16,6 +16,8 @@ GitHub Pages (static export): https://caradmico.github.io/space-apps-groton/
 
 Resources (Star Visualizer first): https://caradmico.github.io/space-apps-groton/resources/
 
+First-time only (free on this public repo): **Settings → Pages → Deploy from a branch → `gh-pages` / (root)**. Actions republishes `gh-pages` on push to `main`.
+
 ## Stack
 
 Next.js App Router -- TypeScript -- Tailwind CSS -- GitHub Pages static export
