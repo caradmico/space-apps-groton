@@ -10,9 +10,15 @@ WIP. Fun lane: after a mill exam ship, or weekend. Do not open as empty-cycle fi
 - **Register:** https://www.spaceappschallenge.org/2026/local-events/groton
 - **Commits:** `space: <short>`
 
+## Public site ($0)
+
+GitHub Pages (static export): https://caradmico.github.io/space-apps-groton/
+
+Resources (Star Visualizer first): https://caradmico.github.io/space-apps-groton/resources/
+
 ## Stack
 
-Next.js App Router -- TypeScript -- Tailwind CSS -- Vercel-ready
+Next.js App Router -- TypeScript -- Tailwind CSS -- GitHub Pages static export
 
 ## Pages
 
@@ -34,8 +40,11 @@ npm run dev
 
 ```bash
 npm run build
-npm start
+npm run preview
 ```
+
+`next start` is a Node server and is not used for the public site. GitHub Actions
+builds with `PAGES_BASE_PATH=/space-apps-groton` (project Pages).
 
 Bun also works (`bun install && bun run build`).
 
