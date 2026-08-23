@@ -10,9 +10,17 @@ WIP. Fun lane: after a mill exam ship, or weekend. Do not open as empty-cycle fi
 - **Register:** https://www.spaceappschallenge.org/2026/local-events/groton
 - **Commits:** `space: <short>`
 
+## Public site ($0)
+
+**Resources (Star Visualizer first):** https://caradmico.github.io/space-apps-groton/resources/
+
+That URL is live for a logged-out stranger. Star Visualizer stays on `https://staris-b01f2.firebaseapp.com/`.
+
+This repo also static-exports to the `gh-pages` branch. To serve the full Next.js export from the same host, one free toggle: **Settings → Pages → Deploy from a branch → `gh-pages` / (root)**.
+
 ## Stack
 
-Next.js App Router -- TypeScript -- Tailwind CSS -- Vercel-ready
+Next.js App Router -- TypeScript -- Tailwind CSS -- GitHub Pages static export
 
 ## Pages
 
@@ -34,8 +42,11 @@ npm run dev
 
 ```bash
 npm run build
-npm start
+npm run preview
 ```
+
+`next start` is a Node server and is not used for the public site. GitHub Actions
+builds with `PAGES_BASE_PATH=/space-apps-groton` (project Pages).
 
 Bun also works (`bun install && bun run build`).
 
