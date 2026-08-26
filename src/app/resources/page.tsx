@@ -4,7 +4,7 @@ export const metadata: Metadata = { title: "Resources" };
 
 const links = [
   { label: "Star Visualizer (StarIS)", href: "https://staris-b01f2.firebaseapp.com/", note: "Explore nearby stars — free demo linked from Groton (Path A, no billing)" },
-  { label: "Official Groton local event page", href: "https://www.spaceappschallenge.org/2026/local-events/groton", note: "Register · min page content due Aug 25" },
+  { label: "Official Groton local event page", href: "https://www.spaceappschallenge.org/2026/local-events/groton", note: "Not live yet (404). Register is not open on this URL." },
   { label: "NASA Space Apps Challenge", href: "https://www.spaceappschallenge.org/", note: "Global program home" },
   { label: "Challenge summaries", href: "https://www.spaceappschallenge.org/", note: "Coming September 17, 2026" },
   { label: "Full challenge statements", href: "https://www.spaceappschallenge.org/", note: "Coming October 28, 2026" },
