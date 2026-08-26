@@ -28,7 +28,7 @@ export default function HomePage() {
             rel="noopener noreferrer"
             className="inline-flex items-center justify-center rounded-full bg-neon px-6 py-3 text-sm font-bold text-background hover:bg-neon-dim focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neon"
           >
-            Official Groton page — not live yet
+            Register on Space Apps
           </a>
           <Link
             href="/schedule"

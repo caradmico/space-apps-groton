@@ -71,7 +71,7 @@ export function Header() {
             rel="noopener noreferrer"
             className="mt-2 inline-flex items-center justify-center rounded-full bg-neon px-4 py-2 text-sm font-bold text-background transition hover:bg-neon-dim focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neon md:ml-2 md:mt-0"
           >
-            Official page
+            Register
           </a>
         </nav>
       </div>
