@@ -7,38 +7,49 @@ https://caradmico.github.io/space-apps-groton/bin-lod/
 
 No GCP, Blaze, Functions, or Firebase Storage. Three.js is loaded from unpkg via importmap, same pattern as Path A (`https://staris-b01f2.firebaseapp.com/`). This page is **not** a polish of the HYG local-star sphere.
 
-## Record layout (exact — pre-strip bundle)
+## Record layout
 
-62 bytes / record, little-endian:
+62 bytes / record, little-endian. **GaiaSource Drive shards are RA/Dec (+ optional parallax), not precomputed xyz.** The previous synthetic HYG catalog stored xyz at +32/+40/+48; Cara’s GaiaSource bins do not (those slots are ~0 / unused, which is why an xyz-only reader collapsed to a center dot).
+
+### GaiaSource (live `catalog.bin`)
 
 | Offset | Type | Field |
 |--------|------|--------|
-| +0 … +31 | — | unused by this viewer (id / reserved) |
+| +8 | float64 | RA degrees |
+| +16 | float64 | Dec degrees |
+| +24 | float64 | parallax mas (often NaN; only ~0.3% finite) |
+| +56 | uint16 | color class |
+| +58 | float32 | mag |
+
+On read: skip NaN RA/Dec. If parallax is finite and `> 0`, `distance_pc = 1000 / parallax_mas` and convert RA/Dec/distance to Cartesian (standard equatorial). Otherwise place the star on a fixed-radius sphere from RA/Dec so the sky tile is visible. Mag at +58 still drives point size. The camera auto-frames the mean sky direction / projected bbox.
+
+### Legacy StarIS / synthetic xyz
+
+| Offset | Type | Field |
+|--------|------|--------|
 | +32 | float64 | x stored as `value / 206265` |
 | +40 | float64 | y stored as `value / 206265` |
 | +48 | float64 | z stored as `value / 206265` |
 | +56 | uint16 | color class |
 | +58 | float32 | mag |
 
-On read, multiply x/y/z by **206265**.
+On read, multiply x/y/z by **206265**. The viewer auto-detects this path when `>50%` of a sample has nonzero finite xyz at +32/+40/+48.
 
 ## `data/catalog.bin` in this repo
 
-**Format-compatible synthetic catalog** (65,536 records; galactic-disk jitter). It is **not** the live Gaia dump.
+**Drive-derived GaiaSource sample** (85,290 × 62 B). It is a sky-tile shard (RA ~311–318°, Dec ~−4.8–0°), not a precomputed xyz cube and not the old generated HYG stand-in.
 
-The viewer fetches **`./data/catalog.bin`** (Pages URL: `https://caradmico.github.io/space-apps-groton/bin-lod/data/catalog.bin`). That file must exist on the `gh-pages` branch at `bin-lod/data/catalog.bin`. A 2026-09-04 Pages 404 happened because an earlier main slice shipped HTML/CSS/JS without the sample catalog.
+The viewer fetches **`./data/catalog.bin`** (Pages URL: `https://caradmico.github.io/space-apps-groton/bin-lod/data/catalog.bin`). That file must exist on the `gh-pages` branch at `bin-lod/data/catalog.bin`. Do not replace it with the synthetic generator unless you are testing the xyz path.
 
-On **2026-09-04**, Firebase Storage `gaia_processed.bin` for project `staris-b01f2` also returned **HTTP 404**, so this Spark demo ships a generated stand-in instead of a Storage fetch. Do not fetch Storage.
-
-Regenerate:
+The xyz generator still exists for format experiments:
 
 ```bash
 node public/bin-lod/scripts/generate-catalog.mjs
 ```
 
-## Drop the real catalog
+## Drop another shard
 
-1. Copy Cara’s `gaia_processed.bin` over `public/bin-lod/data/catalog.bin` (same 62-byte records).
+1. Copy a GaiaSource 62-byte LE shard over `public/bin-lod/data/catalog.bin` (RA/Dec at +8/+16).
 2. Redeploy Pages (`main` → `gh-pages` via the existing workflow), or open `public/bin-lod/` locally.
 3. Keep the file Hosting/Pages-sized. The viewer indexes with typed arrays and yields so a large file does not freeze the tab the way a full JS object graph did.
 
