@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StarIS BIN LOD v0</title>
+  <link rel="stylesheet" href="./css/styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>StarIS · .BIN LOD v0</h1>
+      <p>Far = generalized · Near = accurate · Streams her 62-byte records (no one-file freeze)</p>
+    </div>
+    <div class="meta" id="hud">Starting…</div>
+  </header>
+  <main id="canvas-wrap" aria-label="Point catalog"></main>
+  <footer>
+    Spark path · format from pre-strip SpaceIS (62 B/record) ·
+    drop real <code>gaia_processed.bin</code> at <code>data/catalog.bin</code> when Storage is restored
+  </footer>
+  <script type="module" src="./js/lod-app.js"></script>
+</body>
+</html>
