@@ -1,32 +1,45 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>StarIS BIN LOD v0</title>
-  <link rel="stylesheet" href="./css/styles.css" />
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
-    }
-  }
-  </script>
-</head>
-<body>
-  <header class="top">
-    <div>
-      <h1>StarIS · .BIN LOD v0</h1>
-      <p>Far = generalized · Near = accurate · Streams her 62-byte records (no one-file freeze)</p>
-    </div>
-    <div class="meta" id="hud">Starting…</div>
-  </header>
-  <main id="canvas-wrap" aria-label="Point catalog"></main>
-  <footer>
-    Spark path · format from pre-strip SpaceIS (62 B/record) ·
-    drop real <code>gaia_processed.bin</code> at <code>data/catalog.bin</code> when Storage is restored
-  </footer>
-  <script type="module" src="./js/lod-app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070d" />
+    <meta
+      name="description"
+      content="StarIS BIN LOD — load a massive 62-byte point catalog in-browser. Far generalized, near accurate. $0 Spark demo."
+    />
+    <title>StarIS BIN LOD (Spark)</title>
+    <link rel="stylesheet" href="css/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>StarIS BIN LOD (Spark)</h1>
+        <p>Far generalized · near accurate · 62-byte catalog</p>
+      </div>
+      <div class="controls">
+        <div class="meta" id="lod-mode">LOD …</div>
+        <div class="meta" id="draw-count">…</div>
+      </div>
+    </header>
+
+    <main id="canvas-wrap" aria-label="BIN point catalog">
+      <div class="hud" id="hud-status">Starting…</div>
+    </main>
+
+    <footer class="footer">
+      $0 Spark demo — no Storage, Functions, or Blaze. Catalog is format-compatible
+      (live Firebase Storage <code>gaia_processed.bin</code> returned HTTP 404 on 2026-09-04).
+    </footer>
+
+    <script type="module" src="js/lod-app.js"></script>
+  </body>
 </html>
