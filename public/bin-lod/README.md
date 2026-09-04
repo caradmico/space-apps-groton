@@ -24,9 +24,11 @@ On read, multiply x/y/z by **206265**.
 
 ## `data/catalog.bin` in this repo
 
-**Format-compatible synthetic catalog** (≥50k records; galactic-disk jitter). It is **not** the live Gaia dump.
+**Format-compatible synthetic catalog** (65,536 records; galactic-disk jitter). It is **not** the live Gaia dump.
 
-On **2026-09-04**, Firebase Storage `gaia_processed.bin` for project `staris-b01f2` returned **HTTP 404**, so this Spark demo ships a generated stand-in instead of a Storage fetch.
+The viewer fetches **`./data/catalog.bin`** (Pages URL: `https://caradmico.github.io/space-apps-groton/bin-lod/data/catalog.bin`). That file must exist on the `gh-pages` branch at `bin-lod/data/catalog.bin`. A 2026-09-04 Pages 404 happened because an earlier main slice shipped HTML/CSS/JS without the sample catalog.
+
+On **2026-09-04**, Firebase Storage `gaia_processed.bin` for project `staris-b01f2` also returned **HTTP 404**, so this Spark demo ships a generated stand-in instead of a Storage fetch. Do not fetch Storage.
 
 Regenerate:
 
