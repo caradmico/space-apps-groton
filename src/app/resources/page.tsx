@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = { title: "Resources" };
 
+const binLodHref = `${process.env.PAGES_BASE_PATH || ""}/bin-lod/`;
+
 const links = [
+  { label: "StarIS BIN LOD (Spark)", href: binLodHref, note: "Massive 62-byte .BIN catalog in-browser — far generalized, near accurate. $0 Pages, no Storage." },
   { label: "Star Visualizer (StarIS)", href: "https://staris-b01f2.firebaseapp.com/", note: "Explore nearby stars — free demo linked from Groton (Path A, no billing)" },
   { label: "Official Groton local event page", href: "https://www.spaceappschallenge.org/2026/local-events/groton", note: "Register is open." },
   { label: "NASA Space Apps Challenge", href: "https://www.spaceappschallenge.org/", note: "Global program home" },
@@ -21,7 +24,12 @@ export default function ResourcesPage() {
       <ul className="mt-8 space-y-3">
         {links.map((l) => (
           <li key={l.label} className="rounded-xl border border-border bg-surface/70 px-5 py-4">
-            <a href={l.href} target="_blank" rel="noopener noreferrer" className="font-semibold text-blue-bright hover:text-neon">
+            <a
+              href={l.href}
+              target={l.href.startsWith("http") ? "_blank" : undefined}
+              rel={l.href.startsWith("http") ? "noopener noreferrer" : undefined}
+              className="font-semibold text-blue-bright hover:text-neon"
+            >
               {l.label}
             </a>
             <p className="mt-1 text-sm text-muted">{l.note}</p>
