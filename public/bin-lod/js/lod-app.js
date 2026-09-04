@@ -192,13 +192,14 @@ function readMag(view, i) {
 
 function magToSize(mag, scale) {
   const m = Math.min(Math.max(mag, -1.5), 22);
-  return Math.max(0.55, (5.2 - m * 0.2) * scale);
+  const t = (22 - m) / 23.5;
+  return Math.max(0.32, (0.38 + t * t * 2.1) * scale);
 }
 
 function writeAppearance(col, size, offset, colorClass, mag, sizeScale) {
   const rgb = CLASS_RGB[colorClass % CLASS_RGB.length];
-  const t = Math.min(Math.max((mag + 1) / 18, 0), 1);
-  const bright = 0.42 + (1 - t) * 0.58;
+  const t = Math.min(Math.max((22 - mag) / 23.5, 0), 1);
+  const bright = 0.38 + t * 0.62;
   col[offset * 3] = rgb[0] * bright;
   col[offset * 3 + 1] = rgb[1] * bright;
   col[offset * 3 + 2] = rgb[2] * bright;
@@ -224,7 +225,7 @@ function cellOf(x, y, z, bbox) {
 function setFrame(targetX, targetY, targetZ, extent) {
   const size = Math.max(extent, 0.08);
   const fov = 55 * Math.PI / 180;
-  const dist = (size * 1.02) / Math.tan(fov / 2);
+  const dist = (size * 1.35) / Math.tan(fov / 2);
   const tlen = Math.hypot(targetX, targetY, targetZ);
   let ox;
   let oy;
@@ -253,9 +254,9 @@ function setFrame(targetX, targetY, targetZ, extent) {
     dist,
   };
   if (catalog.layout === "radec") {
-    catalog.nearRadius = Math.max(size * 0.28, 0.9);
-    catalog.nearEnter = Math.max(size * 0.78, 2.4);
-    catalog.nearExit = Math.max(size * 1.12, 3.2);
+    catalog.nearRadius = Math.max(size * 0.42, 1.2);
+    catalog.nearEnter = Math.max(dist * 0.74, size * 0.9);
+    catalog.nearExit = Math.max(dist * 0.94, size * 1.2);
   } else {
     catalog.nearRadius = NEAR_RADIUS;
     catalog.nearEnter = NEAR_ENTER;
@@ -269,8 +270,8 @@ const vertexShader = /* glsl */ `
   void main() {
     vColor = color;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-    gl_PointSize = aSize * (200.0 / max(-mvPosition.z, 0.4));
-    gl_PointSize = clamp(gl_PointSize, 1.0, 42.0);
+    gl_PointSize = aSize * (64.0 / max(-mvPosition.z, 0.35));
+    gl_PointSize = clamp(gl_PointSize, 0.75, 16.0);
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
@@ -400,7 +401,7 @@ async function buildFarAndIndex() {
         gpu.farPos[far * 3] = pos.x;
         gpu.farPos[far * 3 + 1] = pos.y;
         gpu.farPos[far * 3 + 2] = pos.z;
-        writeAppearance(gpu.farCol, gpu.farSize, far, readColorClass(view, pick), bestMag, 0.85);
+        writeAppearance(gpu.farCol, gpu.farSize, far, readColorClass(view, pick), bestMag, 0.55);
         far += 1;
       }
     }
@@ -541,7 +542,7 @@ function fillNear(target) {
             n,
             readColorClass(view, i),
             readMag(view, i),
-            1.15
+            0.72
           );
           n += 1;
         }
