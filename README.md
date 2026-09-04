@@ -16,6 +16,10 @@ WIP. Fun lane: after a mill exam ship, or weekend. Do not open as empty-cycle fi
 
 That URL is live for a logged-out stranger. Star Visualizer stays on `https://staris-b01f2.firebaseapp.com/`.
 
+**BIN LOD demo (galaxy-scale catalog, far/near):** https://caradmico.github.io/space-apps-groton/bin-lod/
+
+Sample catalog (format-compatible, not live Gaia): https://caradmico.github.io/space-apps-groton/bin-lod/data/catalog.bin
+
 This repo also static-exports to the `gh-pages` branch. To serve the full Next.js export from the same host, one free toggle: **Settings → Pages → Deploy from a branch → `gh-pages` / (root)**.
 
 ## Stack
