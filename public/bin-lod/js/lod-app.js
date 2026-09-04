@@ -1,13 +1,22 @@
 /**
  * StarIS BIN LOD viewer.
  *
- * Reads Cara's 62-byte LE point-catalog records from an ArrayBuffer.
+ * Reads Cara’s 62-byte LE point-catalog records from an ArrayBuffer.
  * NEVER materializes an Array of star objects for the whole file.
  *
- * Record (exact, pre-strip SpaceIS bundle):
- *   +32 float64 x, +40 y, +48 z  — stored as value/206265 (multiply on read)
+ * GaiaSource (Drive shards / live catalog.bin):
+ *   +8  float64 RA degrees
+ *   +16 float64 Dec degrees
+ *   +24 float64 parallax mas (often NaN; used only when finite and > 0)
  *   +56 uint16  color class
  *   +58 float32 mag
+ *   +32/+40/+48 are NOT usable xyz on these bins (almost all zero → origin dot)
+ *
+ * Legacy StarIS / synthetic HYG-style:
+ *   +32/+40/+48 float64 xyz stored as value/206265 (multiply on read)
+ *
+ * Auto-detect: if >50% of a sample has nonzero finite xyz@32, use the old path.
+ * Otherwise RA/Dec → Cartesian (parallax distance, else fixed-radius sphere).
  *
  * LOD:
  *   FAR  — stride-sample generalized points (one GPU buffer)
@@ -18,12 +27,18 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const RECORD_SIZE = 62;
+const OFF_RA = 8;
+const OFF_DEC = 16;
+const OFF_PLX = 24;
 const OFF_X = 32;
 const OFF_Y = 40;
 const OFF_Z = 48;
 const OFF_COLOR = 56;
 const OFF_MAG = 58;
 const UNIT = 206265;
+const DEG2RAD = Math.PI / 180;
+const SKY_RADIUS = 100;
+const DETECT_SAMPLE = 512;
 
 const FAR_BUDGET = 8192;
 const NEAR_BUDGET = 12288;
@@ -54,11 +69,17 @@ const catalog = {
   buffer: null,
   view: null,
   count: 0,
+  validCount: 0,
   stride: 1,
+  layout: "radec",
   bbox: null,
   cellStart: null,
   cellCount: null,
   cellIndex: null,
+  frame: null,
+  nearRadius: NEAR_RADIUS,
+  nearEnter: NEAR_ENTER,
+  nearExit: NEAR_EXIT,
 };
 
 const lod = {
@@ -80,6 +101,8 @@ const gpu = {
   nearSize: null,
 };
 
+const scratch = { x: 0, y: 0, z: 0, ux: 0, uy: 0, uz: 0 };
+
 function setStatus(html, isError = false) {
   el.status.innerHTML = html;
   el.status.classList.toggle("status-error", isError);
@@ -95,16 +118,67 @@ function yieldFrame() {
   });
 }
 
-function readX(view, i) {
-  return view.getFloat64(i * RECORD_SIZE + OFF_X, true) * UNIT;
+function detectLayout(view, count) {
+  const sample = Math.min(count, DETECT_SAMPLE);
+  if (sample === 0) return "radec";
+  let xyzOk = 0;
+  for (let i = 0; i < sample; i++) {
+    const x = view.getFloat64(i * RECORD_SIZE + OFF_X, true);
+    const y = view.getFloat64(i * RECORD_SIZE + OFF_Y, true);
+    const z = view.getFloat64(i * RECORD_SIZE + OFF_Z, true);
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) && (x !== 0 || y !== 0 || z !== 0)) {
+      xyzOk += 1;
+    }
+  }
+  return xyzOk / sample > 0.5 ? "xyz" : "radec";
 }
 
-function readY(view, i) {
-  return view.getFloat64(i * RECORD_SIZE + OFF_Y, true) * UNIT;
-}
+function readStar(view, i, out) {
+  if (catalog.layout === "xyz") {
+    const x = view.getFloat64(i * RECORD_SIZE + OFF_X, true) * UNIT;
+    const y = view.getFloat64(i * RECORD_SIZE + OFF_Y, true) * UNIT;
+    const z = view.getFloat64(i * RECORD_SIZE + OFF_Z, true) * UNIT;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return false;
+    out.x = x;
+    out.y = y;
+    out.z = z;
+    const len = Math.hypot(x, y, z);
+    if (len > 1e-12) {
+      out.ux = x / len;
+      out.uy = y / len;
+      out.uz = z / len;
+    } else {
+      out.ux = 0;
+      out.uy = 0;
+      out.uz = 1;
+    }
+    return true;
+  }
 
-function readZ(view, i) {
-  return view.getFloat64(i * RECORD_SIZE + OFF_Z, true) * UNIT;
+  const ra = view.getFloat64(i * RECORD_SIZE + OFF_RA, true);
+  const dec = view.getFloat64(i * RECORD_SIZE + OFF_DEC, true);
+  if (!Number.isFinite(ra) || !Number.isFinite(dec)) return false;
+
+  const raR = ra * DEG2RAD;
+  const decR = dec * DEG2RAD;
+  const cosDec = Math.cos(decR);
+  const ux = cosDec * Math.cos(raR);
+  const uy = cosDec * Math.sin(raR);
+  const uz = Math.sin(decR);
+  out.ux = ux;
+  out.uy = uy;
+  out.uz = uz;
+
+  const plx = view.getFloat64(i * RECORD_SIZE + OFF_PLX, true);
+  let dist = SKY_RADIUS;
+  if (Number.isFinite(plx) && plx > 0) {
+    const pc = 1000 / plx;
+    if (Number.isFinite(pc) && pc > 0) dist = pc;
+  }
+  out.x = ux * dist;
+  out.y = uy * dist;
+  out.z = uz * dist;
+  return true;
 }
 
 function readColorClass(view, i) {
@@ -112,18 +186,20 @@ function readColorClass(view, i) {
 }
 
 function readMag(view, i) {
-  return view.getFloat32(i * RECORD_SIZE + OFF_MAG, true);
+  const mag = view.getFloat32(i * RECORD_SIZE + OFF_MAG, true);
+  return Number.isFinite(mag) ? mag : 18;
 }
 
 function magToSize(mag, scale) {
-  const m = Math.min(Math.max(mag, -1.5), 16);
-  return Math.max(0.7, (5.2 - m * 0.26) * scale);
+  const m = Math.min(Math.max(mag, -1.5), 22);
+  const t = (22 - m) / 23.5;
+  return Math.max(0.32, (0.38 + t * t * 2.1) * scale);
 }
 
 function writeAppearance(col, size, offset, colorClass, mag, sizeScale) {
   const rgb = CLASS_RGB[colorClass % CLASS_RGB.length];
-  const t = Math.min(Math.max((mag + 1) / 14, 0), 1);
-  const bright = 0.45 + (1 - t) * 0.55;
+  const t = Math.min(Math.max((22 - mag) / 23.5, 0), 1);
+  const bright = 0.38 + t * 0.62;
   col[offset * 3] = rgb[0] * bright;
   col[offset * 3 + 1] = rgb[1] * bright;
   col[offset * 3 + 2] = rgb[2] * bright;
@@ -146,14 +222,56 @@ function cellOf(x, y, z, bbox) {
   return ix + iy * GRID + iz * GRID * GRID;
 }
 
+function setFrame(targetX, targetY, targetZ, extent) {
+  const size = Math.max(extent, 0.08);
+  const fov = 55 * Math.PI / 180;
+  const dist = (size * 1.35) / Math.tan(fov / 2);
+  const tlen = Math.hypot(targetX, targetY, targetZ);
+  let ox;
+  let oy;
+  let oz;
+  if (tlen > 1e-8) {
+    ox = targetX / tlen;
+    oy = targetY / tlen;
+    oz = targetZ / tlen;
+  } else {
+    ox = 0;
+    oy = 0.28;
+    oz = 0.96;
+    const olen = Math.hypot(ox, oy, oz);
+    ox /= olen;
+    oy /= olen;
+    oz /= olen;
+  }
+  catalog.frame = {
+    targetX,
+    targetY,
+    targetZ,
+    cameraX: targetX + ox * dist,
+    cameraY: targetY + oy * dist,
+    cameraZ: targetZ + oz * dist,
+    extent: size,
+    dist,
+  };
+  if (catalog.layout === "radec") {
+    catalog.nearRadius = Math.max(size * 0.42, 1.2);
+    catalog.nearEnter = Math.max(dist * 0.74, size * 0.9);
+    catalog.nearExit = Math.max(dist * 0.94, size * 1.2);
+  } else {
+    catalog.nearRadius = NEAR_RADIUS;
+    catalog.nearEnter = NEAR_ENTER;
+    catalog.nearExit = NEAR_EXIT;
+  }
+}
+
 const vertexShader = /* glsl */ `
   attribute float aSize;
   varying vec3 vColor;
   void main() {
     vColor = color;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-    gl_PointSize = aSize * (200.0 / max(-mvPosition.z, 0.4));
-    gl_PointSize = clamp(gl_PointSize, 1.0, 42.0);
+    gl_PointSize = aSize * (64.0 / max(-mvPosition.z, 0.35));
+    gl_PointSize = clamp(gl_PointSize, 0.75, 16.0);
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
@@ -206,6 +324,7 @@ async function loadCatalog() {
   catalog.buffer = buffer;
   catalog.view = new DataView(buffer);
   catalog.count = count;
+  catalog.layout = detectLayout(catalog.view, count);
   return count;
 }
 
@@ -225,38 +344,66 @@ async function buildFarAndIndex() {
   let maxX = -Infinity;
   let maxY = -Infinity;
   let maxZ = -Infinity;
+  let frameMinX = Infinity;
+  let frameMinY = Infinity;
+  let frameMinZ = Infinity;
+  let frameMaxX = -Infinity;
+  let frameMaxY = -Infinity;
+  let frameMaxZ = -Infinity;
+  let sumUx = 0;
+  let sumUy = 0;
+  let sumUz = 0;
+  let valid = 0;
 
   const cellN = GRID * GRID * GRID;
   const counts = new Uint32Array(cellN);
   let far = 0;
+  const pos = scratch;
 
   for (let i = 0; i < count; i++) {
-    const x = readX(view, i);
-    const y = readY(view, i);
-    const z = readZ(view, i);
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-    if (z < minZ) minZ = z;
-    if (x > maxX) maxX = x;
-    if (y > maxY) maxY = y;
-    if (z > maxZ) maxZ = z;
+    if (readStar(view, i, pos)) {
+      valid += 1;
+      if (pos.x < minX) minX = pos.x;
+      if (pos.y < minY) minY = pos.y;
+      if (pos.z < minZ) minZ = pos.z;
+      if (pos.x > maxX) maxX = pos.x;
+      if (pos.y > maxY) maxY = pos.y;
+      if (pos.z > maxZ) maxZ = pos.z;
+
+      const fx = pos.ux * SKY_RADIUS;
+      const fy = pos.uy * SKY_RADIUS;
+      const fz = pos.uz * SKY_RADIUS;
+      sumUx += pos.ux;
+      sumUy += pos.uy;
+      sumUz += pos.uz;
+      if (fx < frameMinX) frameMinX = fx;
+      if (fy < frameMinY) frameMinY = fy;
+      if (fz < frameMinZ) frameMinZ = fz;
+      if (fx > frameMaxX) frameMaxX = fx;
+      if (fy > frameMaxY) frameMaxY = fy;
+      if (fz > frameMaxZ) frameMaxZ = fz;
+    }
 
     if (i % stride === 0 && far < farCap) {
-      let pick = i;
-      let bestMag = readMag(view, i);
+      let pick = -1;
+      let bestMag = Infinity;
       const end = Math.min(i + stride, count);
-      for (let j = i + 1; j < end; j++) {
+      for (let j = i; j < end; j++) {
+        if (!readStar(view, j, pos)) continue;
         const m = readMag(view, j);
         if (m < bestMag) {
           bestMag = m;
           pick = j;
         }
       }
-      gpu.farPos[far * 3] = readX(view, pick);
-      gpu.farPos[far * 3 + 1] = readY(view, pick);
-      gpu.farPos[far * 3 + 2] = readZ(view, pick);
-      writeAppearance(gpu.farCol, gpu.farSize, far, readColorClass(view, pick), bestMag, 0.85);
-      far += 1;
+      if (pick >= 0) {
+        readStar(view, pick, pos);
+        gpu.farPos[far * 3] = pos.x;
+        gpu.farPos[far * 3 + 1] = pos.y;
+        gpu.farPos[far * 3 + 2] = pos.z;
+        writeAppearance(gpu.farCol, gpu.farSize, far, readColorClass(view, pick), bestMag, 0.55);
+        far += 1;
+      }
     }
 
     if (i > 0 && i % YIELD_EVERY === 0) {
@@ -267,7 +414,12 @@ async function buildFarAndIndex() {
     }
   }
 
-  const pad = 1.5;
+  catalog.validCount = valid;
+  if (valid === 0 || far === 0) {
+    throw new Error("No finite RA/Dec (or xyz) positions in catalog.bin");
+  }
+
+  const pad = catalog.layout === "radec" ? Math.max(SKY_RADIUS * 0.02, 1.5) : 1.5;
   const bbox = {
     minX: minX - pad,
     minY: minY - pad,
@@ -282,8 +434,29 @@ async function buildFarAndIndex() {
   catalog.bbox = bbox;
   lod.farCount = far;
 
+  if (catalog.layout === "radec") {
+    const dirLen = Math.hypot(sumUx, sumUy, sumUz) || 1;
+    const targetX = (sumUx / dirLen) * SKY_RADIUS;
+    const targetY = (sumUy / dirLen) * SKY_RADIUS;
+    const targetZ = (sumUz / dirLen) * SKY_RADIUS;
+    const frameExtent = Math.max(
+      frameMaxX - frameMinX,
+      frameMaxY - frameMinY,
+      frameMaxZ - frameMinZ,
+      0.08
+    );
+    setFrame(targetX, targetY, targetZ, frameExtent);
+  } else {
+    const targetX = (minX + maxX) * 0.5;
+    const targetY = (minY + maxY) * 0.5;
+    const targetZ = (minZ + maxZ) * 0.5;
+    const frameExtent = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 0.08);
+    setFrame(targetX, targetY, targetZ, frameExtent);
+  }
+
   for (let i = 0; i < count; i++) {
-    const c = cellOf(readX(view, i), readY(view, i), readZ(view, i), bbox);
+    if (!readStar(view, i, pos)) continue;
+    const c = cellOf(pos.x, pos.y, pos.z, bbox);
     counts[c] += 1;
     if (i > 0 && i % YIELD_EVERY === 0) await yieldFrame();
   }
@@ -295,10 +468,11 @@ async function buildFarAndIndex() {
     running += counts[c];
   }
 
-  const index = new Uint32Array(count);
+  const index = new Uint32Array(valid);
   const cursor = start.slice();
   for (let i = 0; i < count; i++) {
-    const c = cellOf(readX(view, i), readY(view, i), readZ(view, i), bbox);
+    if (!readStar(view, i, pos)) continue;
+    const c = cellOf(pos.x, pos.y, pos.z, bbox);
     index[cursor[c]] = i;
     cursor[c] += 1;
     if (i > 0 && i % YIELD_EVERY === 0) await yieldFrame();
@@ -317,7 +491,7 @@ function fillNear(target) {
   const { view, bbox, cellStart, cellCount, cellIndex } = catalog;
   if (!bbox) return 0;
 
-  const r = NEAR_RADIUS;
+  const r = catalog.nearRadius;
   const r2 = r * r;
   const minIX = Math.min(
     GRID - 1,
@@ -344,6 +518,7 @@ function fillNear(target) {
     Math.max(0, Math.floor(((target.z + r - bbox.minZ) / bbox.sz) * GRID))
   );
 
+  const pos = scratch;
   let n = 0;
   for (let iz = minIZ; iz <= maxIZ; iz++) {
     for (let iy = minIY; iy <= maxIY; iy++) {
@@ -353,23 +528,21 @@ function fillNear(target) {
         const end = begin + cellCount[c];
         for (let k = begin; k < end && n < NEAR_BUDGET; k++) {
           const i = cellIndex[k];
-          const x = readX(view, i);
-          const y = readY(view, i);
-          const z = readZ(view, i);
-          const dx = x - target.x;
-          const dy = y - target.y;
-          const dz = z - target.z;
+          if (!readStar(view, i, pos)) continue;
+          const dx = pos.x - target.x;
+          const dy = pos.y - target.y;
+          const dz = pos.z - target.z;
           if (dx * dx + dy * dy + dz * dz > r2) continue;
-          gpu.nearPos[n * 3] = x;
-          gpu.nearPos[n * 3 + 1] = y;
-          gpu.nearPos[n * 3 + 2] = z;
+          gpu.nearPos[n * 3] = pos.x;
+          gpu.nearPos[n * 3 + 1] = pos.y;
+          gpu.nearPos[n * 3 + 2] = pos.z;
           writeAppearance(
             gpu.nearCol,
             gpu.nearSize,
             n,
             readColorClass(view, i),
             readMag(view, i),
-            1.15
+            0.72
           );
           n += 1;
         }
@@ -390,30 +563,36 @@ function fillNear(target) {
 
 function updateHud() {
   const mb = (catalog.buffer.byteLength / (1024 * 1024)).toFixed(2);
+  const layoutNote =
+    catalog.layout === "radec"
+      ? "GaiaSource RA/Dec → Cartesian"
+      : "StarIS precomputed xyz × 206265";
   el.mode.textContent = lod.mode === "near" ? "LOD NEAR" : "LOD FAR";
   el.mode.dataset.mode = lod.mode;
   el.count.textContent = `${lod.farCount.toLocaleString()} far · ${lod.nearCount.toLocaleString()} near`;
   setStatus(
-    `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB · 62 B LE<br>` +
+    `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB · 62 B LE · ${layoutNote}<br>` +
       `FAR stride ${catalog.stride} → ${lod.farCount.toLocaleString()} generalized<br>` +
       (lod.mode === "near"
-        ? `NEAR accurate subset ${lod.nearCount.toLocaleString()} (cap ${NEAR_BUDGET.toLocaleString()}) within ${NEAR_RADIUS} of target`
+        ? `NEAR accurate subset ${lod.nearCount.toLocaleString()} (cap ${NEAR_BUDGET.toLocaleString()}) within ${catalog.nearRadius.toFixed(1)} of target`
         : `Zoom in toward a region to load an accurate nearby subset`) +
       `<br>No full star-object array. Drag to orbit · scroll to zoom · right-drag to pan`
   );
 }
 
 function initScene() {
+  const frame = catalog.frame;
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x05070d, 0.008);
+  const fogDensity = Math.min(0.012, 0.45 / Math.max(frame.dist, 8));
+  scene.fog = new THREE.FogExp2(0x05070d, fogDensity);
 
   const camera = new THREE.PerspectiveCamera(
     55,
     el.canvasWrap.clientWidth / Math.max(el.canvasWrap.clientHeight, 1),
-    0.08,
-    800
+    Math.max(frame.dist * 0.01, 0.05),
+    Math.max(frame.dist + SKY_RADIUS * 12, 2500)
   );
-  camera.position.set(0, 28, 92);
+  camera.position.set(frame.cameraX, frame.cameraY, frame.cameraZ);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -425,9 +604,9 @@ function initScene() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.06;
   controls.enablePan = true;
-  controls.minDistance = 2;
-  controls.maxDistance = 280;
-  controls.target.set(0, 0, 0);
+  controls.minDistance = Math.max(frame.extent * 0.12, 0.4);
+  controls.maxDistance = Math.max(frame.extent * 14, frame.dist * 6);
+  controls.target.set(frame.targetX, frame.targetY, frame.targetZ);
 
   gpu.far = makePoints(gpu.farPos, gpu.farCol, gpu.farSize, lod.farCount);
   gpu.near = makePoints(gpu.nearPos, gpu.nearCol, gpu.nearSize, 0);
@@ -435,11 +614,13 @@ function initScene() {
   scene.add(gpu.far);
   scene.add(gpu.near);
 
-  const origin = new THREE.Mesh(
-    new THREE.SphereGeometry(0.18, 16, 16),
-    new THREE.MeshBasicMaterial({ color: 0xffe08a })
-  );
-  scene.add(origin);
+  if (catalog.layout === "xyz") {
+    const origin = new THREE.Mesh(
+      new THREE.SphereGeometry(0.18, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0xffe08a })
+    );
+    scene.add(origin);
+  }
 
   function onResize() {
     const w = el.canvasWrap.clientWidth;
@@ -452,10 +633,11 @@ function initScene() {
 
   function maybeRefreshNear() {
     const dist = camera.position.distanceTo(controls.target);
-    const wantNear = lod.mode === "near" ? dist < NEAR_EXIT : dist < NEAR_ENTER;
+    const wantNear = lod.mode === "near" ? dist < catalog.nearExit : dist < catalog.nearEnter;
+    const moveEps = Math.max(frame.extent * 0.05, 0.2);
     const moved =
-      controls.target.distanceToSquared(lod.lastTarget) > 1.2 ||
-      Math.abs(dist - lod.lastDist) > 2.5;
+      controls.target.distanceToSquared(lod.lastTarget) > moveEps * moveEps ||
+      Math.abs(dist - lod.lastDist) > moveEps * 1.6;
 
     if (wantNear && (lod.mode !== "near" || moved)) {
       fillNear(controls.target);
@@ -497,7 +679,7 @@ async function main() {
     console.error(err);
     setStatus(
       `Could not load <code>data/catalog.bin</code>. ${err.message}<br>` +
-        `Drop a format-compatible 62-byte LE catalog (or Cara’s <code>gaia_processed.bin</code>) as <code>data/catalog.bin</code>.`,
+        `Drop a GaiaSource 62-byte LE shard (RA/Dec at +8/+16) or a StarIS xyz catalog as <code>data/catalog.bin</code>.`,
       true
     );
     el.count.textContent = "0 drawn";
