@@ -22,8 +22,8 @@
   <body>
     <header class="topbar">
       <div class="brand">
-        <h1>StarIS BIN LOD (Spark)</h1>
-        <p>Far generalized · near accurate · 62-byte catalog</p>
+        <h1>StarIS BIN LOD (multi-tile)</h1>
+        <p>Far generalized · near accurate · multi-tile Gaia LOD · 62-byte records</p>
       </div>
       <div class="controls">
         <div class="meta" id="lod-mode">LOD …</div>
@@ -36,8 +36,8 @@
     </main>
 
     <footer class="footer">
-      $0 Spark demo — no Storage, Functions, or Blaze. Catalog is a Drive-derived
-      GaiaSource shard (RA/Dec → sky sphere; not precomputed xyz).
+      $0 Spark demo — no Firebase Storage. Multi-tile Drive-derived GaiaSource LOD
+      (RA/Dec → sky sphere; tiles.json + data/tiles/*.bin).
     </footer>
 
     <script type="module" src="js/lod-app.js"></script>

@@ -40,13 +40,13 @@ const DEG2RAD = Math.PI / 180;
 const SKY_RADIUS = 100;
 const DETECT_SAMPLE = 512;
 
-const FAR_BUDGET = 8192;
+const FAR_BUDGET = 12288;
 const NEAR_BUDGET = 12288;
 const NEAR_ENTER = 36;
 const NEAR_EXIT = 44;
 const NEAR_RADIUS = 14;
 const GRID = 20;
-const YIELD_EVERY = 12000;
+const YIELD_EVERY = 8000;
 
 const CLASS_RGB = [
   [0.55, 0.7, 1.0],
@@ -80,6 +80,9 @@ const catalog = {
   nearRadius: NEAR_RADIUS,
   nearEnter: NEAR_ENTER,
   nearExit: NEAR_EXIT,
+  tileCount: 0,
+  tilesMeta: [],
+  sourceLabel: "catalog.bin",
 };
 
 const lod = {
@@ -310,22 +313,110 @@ function makePoints(pos, col, size, count) {
   return new THREE.Points(geo, material);
 }
 
-async function loadCatalog() {
-  setStatus("Fetching <code>data/catalog.bin</code> as bytes…");
-  const res = await fetch("data/catalog.bin", { cache: "no-cache" });
-  if (!res.ok) {
-    throw new Error(`Failed to load catalog.bin (${res.status})`);
+async function loadTilesIndex() {
+  const urls = ["data/tiles.json", "data/tiles/tiles.json"];
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { cache: "no-cache" });
+      if (!res.ok) {
+        lastErr = new Error(`tiles.json ${res.status} at ${url}`);
+        continue;
+      }
+      return await res.json();
+    } catch (err) {
+      lastErr = err;
+    }
   }
+  throw lastErr || new Error("tiles.json not found");
+}
+
+function tileCenterScore(tile, lookUx, lookUy, lookUz) {
+  const ra = (((tile.ra_min + tile.ra_max) * 0.5) % 360) * DEG2RAD;
+  const dec = ((tile.dec_min + tile.dec_max) * 0.5) * DEG2RAD;
+  const cosDec = Math.cos(dec);
+  const ux = cosDec * Math.cos(ra);
+  const uy = cosDec * Math.sin(ra);
+  const uz = Math.sin(dec);
+  return ux * lookUx + uy * lookUy + uz * lookUz;
+}
+
+async function fetchTileBuffer(tile) {
+  const res = await fetch(tile.url, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`tile ${tile.id} fetch ${res.status}`);
   const buffer = await res.arrayBuffer();
   if (buffer.byteLength < RECORD_SIZE) {
-    throw new Error("catalog.bin is too small to hold one 62-byte record");
+    throw new Error(`tile ${tile.id} too small`);
   }
-  const count = Math.floor(buffer.byteLength / RECORD_SIZE);
-  catalog.buffer = buffer;
-  catalog.view = new DataView(buffer);
-  catalog.count = count;
-  catalog.layout = detectLayout(catalog.view, count);
-  return count;
+  return buffer;
+}
+
+async function loadCatalog() {
+  // Prefer multi-tile LOD batch; fall back to single catalog.bin.
+  try {
+    setStatus("Fetching <code>data/tiles.json</code>…");
+    const index = await loadTilesIndex();
+    const tiles = Array.isArray(index.tiles) ? index.tiles.slice() : [];
+    if (!tiles.length) throw new Error("tiles.json has no tiles");
+
+    // Load all small LOD tiles (each ≤~5 MB). Order: camera-nearest first for early paint.
+    // Default look: galactic-ish (+RA 280° region) then fill remaining.
+    const defaultLookRa = 280 * DEG2RAD;
+    const defaultLookDec = -5 * DEG2RAD;
+    const cosDec = Math.cos(defaultLookDec);
+    const lookUx = cosDec * Math.cos(defaultLookRa);
+    const lookUy = cosDec * Math.sin(defaultLookRa);
+    const lookUz = Math.sin(defaultLookDec);
+    tiles.sort(
+      (a, b) =>
+        tileCenterScore(b, lookUx, lookUy, lookUz) -
+        tileCenterScore(a, lookUx, lookUy, lookUz)
+    );
+
+    setStatus(`Fetching <strong>${tiles.length}</strong> LOD tiles…`);
+    const buffers = await Promise.all(tiles.map((t) => fetchTileBuffer(t)));
+    let totalBytes = 0;
+    for (const b of buffers) totalBytes += b.byteLength;
+    const merged = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const b of buffers) {
+      merged.set(new Uint8Array(b), offset);
+      offset += b.byteLength;
+    }
+    const buffer = merged.buffer;
+    const count = Math.floor(buffer.byteLength / RECORD_SIZE);
+    catalog.buffer = buffer;
+    catalog.view = new DataView(buffer);
+    catalog.count = count;
+    catalog.layout = detectLayout(catalog.view, count);
+    catalog.tileCount = tiles.length;
+    catalog.tilesMeta = tiles;
+    catalog.sourceLabel = `${tiles.length} tiles`;
+    setStatus(
+      `Loaded <strong>${tiles.length}</strong> tiles · ${count.toLocaleString()} records · ${(totalBytes / (1024 * 1024)).toFixed(1)} MiB`
+    );
+    return count;
+  } catch (tileErr) {
+    console.warn("Multi-tile load failed; falling back to catalog.bin", tileErr);
+    setStatus("Fetching <code>data/catalog.bin</code> as bytes…");
+    const res = await fetch("data/catalog.bin", { cache: "no-cache" });
+    if (!res.ok) {
+      throw new Error(`Failed to load tiles.json (${tileErr.message}) and catalog.bin (${res.status})`);
+    }
+    const buffer = await res.arrayBuffer();
+    if (buffer.byteLength < RECORD_SIZE) {
+      throw new Error("catalog.bin is too small to hold one 62-byte record");
+    }
+    const count = Math.floor(buffer.byteLength / RECORD_SIZE);
+    catalog.buffer = buffer;
+    catalog.view = new DataView(buffer);
+    catalog.count = count;
+    catalog.layout = detectLayout(catalog.view, count);
+    catalog.tileCount = 1;
+    catalog.tilesMeta = [];
+    catalog.sourceLabel = "catalog.bin";
+    return count;
+  }
 }
 
 async function buildFarAndIndex() {
@@ -436,13 +527,27 @@ async function buildFarAndIndex() {
 
   if (catalog.layout === "radec") {
     const dirLen = Math.hypot(sumUx, sumUy, sumUz) || 1;
-    const targetX = (sumUx / dirLen) * SKY_RADIUS;
-    const targetY = (sumUy / dirLen) * SKY_RADIUS;
-    const targetZ = (sumUz / dirLen) * SKY_RADIUS;
+    const meanStrength = dirLen / Math.max(valid, 1);
+    let targetX = (sumUx / dirLen) * SKY_RADIUS;
+    let targetY = (sumUy / dirLen) * SKY_RADIUS;
+    let targetZ = (sumUz / dirLen) * SKY_RADIUS;
+    // Multi-tile / wide-sky: mean vector cancels — aim at densest look region on the sphere.
+    if (catalog.tileCount > 1 && meanStrength < 0.45) {
+      const t0 = catalog.tilesMeta[0];
+      if (t0 && Number.isFinite(t0.ra_min)) {
+        const ra = (((t0.ra_min + t0.ra_max) * 0.5) % 360) * DEG2RAD;
+        const dec = ((t0.dec_min + t0.dec_max) * 0.5) * DEG2RAD;
+        const c = Math.cos(dec);
+        targetX = c * Math.cos(ra) * SKY_RADIUS;
+        targetY = c * Math.sin(ra) * SKY_RADIUS;
+        targetZ = Math.sin(dec) * SKY_RADIUS;
+      }
+    }
     const frameExtent = Math.max(
       frameMaxX - frameMinX,
       frameMaxY - frameMinY,
       frameMaxZ - frameMinZ,
+      catalog.tileCount > 1 ? SKY_RADIUS * 0.55 : 0.08,
       0.08
     );
     setFrame(targetX, targetY, targetZ, frameExtent);
@@ -567,12 +672,16 @@ function updateHud() {
     catalog.layout === "radec"
       ? "GaiaSource RA/Dec → Cartesian"
       : "StarIS precomputed xyz × 206265";
+  const tileNote =
+    catalog.tileCount > 1
+      ? `${catalog.tileCount} tiles`
+      : catalog.sourceLabel;
   el.mode.textContent = lod.mode === "near" ? "LOD NEAR" : "LOD FAR";
   el.mode.dataset.mode = lod.mode;
-  el.count.textContent = `${lod.farCount.toLocaleString()} far · ${lod.nearCount.toLocaleString()} near`;
+  el.count.textContent = `${lod.farCount.toLocaleString()} far · ${lod.nearCount.toLocaleString()} near · ${tileNote}`;
   setStatus(
-    `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB · 62 B LE · ${layoutNote}<br>` +
-      `FAR stride ${catalog.stride} → ${lod.farCount.toLocaleString()} generalized<br>` +
+    `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB · ${tileNote} · 62 B LE · ${layoutNote}<br>` +
+      `FAR stride ${catalog.stride} → ${lod.farCount.toLocaleString()} generalized across loaded tiles<br>` +
       (lod.mode === "near"
         ? `NEAR accurate subset ${lod.nearCount.toLocaleString()} (cap ${NEAR_BUDGET.toLocaleString()}) within ${catalog.nearRadius.toFixed(1)} of target`
         : `Zoom in toward a region to load an accurate nearby subset`) +
