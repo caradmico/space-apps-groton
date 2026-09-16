@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ContactLocalLead } from "@/components/ContactLocalLead";
 
 export const metadata: Metadata = { title: "Volunteers" };
 
@@ -27,13 +28,10 @@ export default function VolunteersPage() {
       </ul>
       <div className="mt-10 rounded-xl border border-neon/40 bg-surface p-6">
         <h2 className="text-lg font-bold">Interested?</h2>
-        <p className="mt-2 text-sm text-muted">Email with your name, role interest, and availability.</p>
-        <a
-          href="mailto:caradmico@gmail.com?subject=Space%20Apps%20Groton%20volunteer&body=Name%3A%0ARole%20interest%3A%0AAvailability%3A%0A"
-          className="mt-4 inline-flex rounded-full bg-neon px-5 py-2.5 text-sm font-bold text-background hover:bg-neon-dim"
-        >
-          Email Local Lead
-        </a>
+        <p className="mt-2 text-sm text-muted">
+          Share your name, role interest, and availability.
+        </p>
+        <ContactLocalLead note="Include the role you want and when you can help." />
       </div>
     </div>
   );

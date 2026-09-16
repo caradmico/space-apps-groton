@@ -33,7 +33,7 @@ Next.js App Router -- TypeScript -- Tailwind CSS -- GitHub Pages static export
 | `/` | Landing -- dates, venue TBD, CTA, USO + MWR sponsor strip |
 | `/schedule` | Sample 2-day agenda (cannot start before 9:00 AM local; local judging optional) |
 | `/prizes` | Placeholder prize tiers |
-| `/volunteers` | Low-lift roles + interest mailto stub |
+| `/volunteers` | Low-lift roles + Local Lead contact form (official event page) |
 | `/sponsors` | USO + MWR pitch placeholders + become-a-sponsor CTA |
 | `/resources` | Official links; challenges Sep 17 (summaries) / Oct 28 (full) |
 
