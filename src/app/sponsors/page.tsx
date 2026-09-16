@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ContactLocalLead } from "@/components/ContactLocalLead";
 
 export const metadata: Metadata = { title: "Sponsors" };
 
@@ -31,12 +32,7 @@ export default function SponsorsPage() {
       <div className="mt-10 rounded-xl border border-border bg-surface p-6">
         <h2 className="text-lg font-bold">Become a sponsor</h2>
         <p className="mt-2 text-sm text-muted">Prizes, food, swag, or venue support.</p>
-        <a
-          href="mailto:caradmico@gmail.com?subject=Space%20Apps%20Groton%20sponsor"
-          className="mt-4 inline-flex rounded-full bg-neon px-5 py-2.5 text-sm font-bold text-background hover:bg-neon-dim"
-        >
-          Talk to Local Lead
-        </a>
+        <ContactLocalLead note="Say what you can offer — prizes, food, swag, or venue support." />
       </div>
     </div>
   );
