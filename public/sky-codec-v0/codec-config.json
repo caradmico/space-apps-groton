@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "codec": "STN1",
+  "nside": 8,
+  "ordering": "nest",
+  "xyz_bits": 12,
+  "mag_bits": 8,
+  "has_ci": 0,
+  "far_magic": "STF1",
+  "near_header_bytes": 16,
+  "near_header": "pix u16 | n u16 | ox oy oz f16 | sx sy sz f16. Codec id, version, bit widths, mag0, and mag_scale live in tiles/manifest.json.",
+  "bit_order": "lsb-first",
+  "pack_order": ["qx", "qy", "qz", "mag"],
+  "origin_policy": "r=0 maps to theta=0, phi=0 (Sol has no direction)",
+  "quant_xyz": "origin = nearest f16 of the tile minimum; scale = smallest f16 >= (max - origin) so the far edge quantizes to 4095 or less. Quantize against those f16 values, not the f64 box.",
+  "quant_mag": "(mag - mag0) / mag_scale * 255. mag0 and mag_scale are catalog-global and identical for every tile; both are stored once in manifest.json.",
+  "morton": "12-bit xyz interleave, x at bit 3i, y at 3i+1, z at 3i+2; equal codes break by row_id",
+  "flux_sum_q": {
+    "sum": "sigma 10^(-0.4*mag)",
+    "bias": 20,
+    "scale": 1000,
+    "encode": "clamp(round((log10(sum) + bias) * scale), 0, 65535)"
+  },
+  "mean_mag_u8": {
+    "mag0": -26.7,
+    "mag1": 21.0,
+    "encode": "clamp(round((mean - mag0) / (mag1 - mag0) * 255), 0, 255)"
+  },
+  "lod": {
+    "enter_frame_fraction": 0.74,
+    "exit_frame_fraction": 0.94,
+    "frame": "orbit distance at which the catalog bounding sphere fills the vertical field of view"
+  },
+  "viewer": {
+    "fov_deg": 55,
+    "frame_margin": 1.05,
+    "max_concurrent_near": 4
+  },
+  "source_url": "https://staris-b01f2.web.app/data/stars.json"
+}
