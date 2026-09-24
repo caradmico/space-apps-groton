@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070d" />
+    <title>StarIS sky codec v0</title>
+    <meta
+      name="description"
+      content="Two-level HEALPix tile viewer for the Path A HYG subset. Far field at wide zoom, quantized stars when zoomed into a cell."
+    />
+    <link rel="stylesheet" href="css/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>StarIS sky codec v0</h1>
+        <p>Path A HYG subset · HEALPix nest nside 8 · far field, then one cell</p>
+      </div>
+      <div class="controls">
+        <button type="button" id="btn-far">Wide view</button>
+        <button type="button" id="btn-near">Zoom into a cell</button>
+        <div class="meta" id="star-count">…</div>
+      </div>
+    </header>
+    <main id="canvas-wrap" aria-label="Star field">
+      <div class="hud" id="hud">Loading tiles…</div>
+    </main>
+    <footer class="footer">
+      Static files only. Catalog:
+      <a href="https://staris-b01f2.web.app/data/stars.json">stars.json</a>
+      (8000 rows). No Gaia or SPHEREx data.
+    </footer>
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
