@@ -202,7 +202,7 @@ async function loadTile(pix, signal, gen) {
   const buf = await res.arrayBuffer();
   if (gen !== state.generation) return;
   const t0 = performance.now();
-  const near = decodeNear(buf);
+  const near = decodeNear(buf, state.manifest);
   const points = buildNearPoints(near);
   state.worstSyncMs = Math.max(state.worstSyncMs, performance.now() - t0);
   if (gen !== state.generation) {
@@ -327,6 +327,9 @@ async function main() {
   state.config = config;
   state.manifest = manifest;
   const far = decodeFar(farBuf);
+  if (manifest.codec !== "STN1" || manifest.xyz_bits !== 12 || manifest.mag_bits !== 8) {
+    throw new Error("manifest codec");
+  }
   if (far.nside !== config.nside || far.nside !== manifest.nside) {
     throw new Error("nside mismatch");
   }
