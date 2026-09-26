@@ -11,7 +11,7 @@ const links = [
   { label: "NASA Space Apps Challenge", href: "https://www.spaceappschallenge.org/", note: "Global program home" },
   { label: "Challenge summaries", href: "https://www.spaceappschallenge.org/", note: "Coming September 17, 2026" },
   { label: "Full challenge statements", href: "https://www.spaceappschallenge.org/", note: "Coming October 28, 2026" },
-  { label: "Ops board (internal)", href: "https://github.com/caradmico/jarvis-operator/blob/main/ops/plans/06-space-apps.md", note: "Space Boi flagship plan" },
+  { label: "Ops board (internal)", href: "", note: "Space Boi flagship plan" },
 ];
 
 export default function ResourcesPage() {
@@ -24,14 +24,18 @@ export default function ResourcesPage() {
       <ul className="mt-8 space-y-3">
         {links.map((l) => (
           <li key={l.label} className="rounded-xl border border-border bg-surface/70 px-5 py-4">
-            <a
-              href={l.href}
-              target={l.href.startsWith("http") ? "_blank" : undefined}
-              rel={l.href.startsWith("http") ? "noopener noreferrer" : undefined}
-              className="font-semibold text-blue-bright hover:text-neon"
-            >
-              {l.label}
-            </a>
+            {l.href ? (
+              <a
+                href={l.href}
+                target={l.href.startsWith("http") ? "_blank" : undefined}
+                rel={l.href.startsWith("http") ? "noopener noreferrer" : undefined}
+                className="font-semibold text-blue-bright hover:text-neon"
+              >
+                {l.label}
+              </a>
+            ) : (
+              <span className="font-semibold">{l.label}</span>
+            )}
             <p className="mt-1 text-sm text-muted">{l.note}</p>
           </li>
         ))}
