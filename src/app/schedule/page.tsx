@@ -14,7 +14,7 @@ const day1 = [
 const day2 = [
   ["12:00", "Check-in. Hacking resumes"],
   ["12:30–15:00", "Hacking. Demo and submit clinic around 13:00"],
-  ["15:00–16:30", "Optional local pitches (not required for Global)"],
+  ["15:00–16:30", "Optional pitches (not required for Global)"],
   [
     "16:30–17:00",
     "Submit together: Project tab, public demo, then Submit for Judging",
