@@ -3,19 +3,22 @@ import type { Metadata } from "next";
 export const metadata: Metadata = { title: "Schedule" };
 
 const day1 = [
-  ["09:00", "Doors · welcome · access / logistics"],
-  ["09:30", "Team formation · no coding required"],
+  ["09:00", "Welcome and logistics"],
+  ["09:30", "Team formation. No coding experience is required."],
   ["10:00–12:00", "Hacking"],
-  ["12:00–13:00", "Lunch break (plan TBD — do not assume meals provided)"],
-  ["13:00–16:00", "Hacking · optional NASA-data clinic ~14:00"],
-  ["16:00–17:00", "Day-1 wrap · optional evening work off-site for duty-free adults"],
+  ["12:00–13:00", "Lunch break"],
+  ["13:00–16:00", "Hacking. Optional NASA data clinic around 14:00"],
+  ["16:00–17:00", "Day 1 wrap. Optional work on your own after 17:00"],
 ];
 
 const day2 = [
-  ["12:00", "Doors · check-in · hacking resumes"],
-  ["12:30–15:00", "Hacking · demo/submit clinic ~13:00"],
-  ["15:00–16:30", "Optional local pitches (not required for Global)"],
-  ["16:30–17:00", "Submit-together block — Project tab → public demo → Submit for Judging"],
+  ["12:00", "Check-in. Hacking resumes"],
+  ["12:30–15:00", "Hacking. Demo and submit clinic around 13:00"],
+  ["15:00–16:30", "Optional pitches (not required for Global)"],
+  [
+    "16:30–17:00",
+    "Submit together: Project tab, public demo, then Submit for Judging",
+  ],
   ["Until 23:59", "Final Submit for Judging on the Space Apps portal"],
 ];
 
@@ -38,15 +41,15 @@ function Agenda({ title, rows }: { title: string; rows: string[][] }) {
 export default function SchedulePage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
-      <h1 className="text-3xl font-bold tracking-tight">Family-hours schedule</h1>
+      <h1 className="text-3xl font-bold tracking-tight">Schedule</h1>
       <p className="mt-3 max-w-2xl text-muted">
-        In-room hours, not a 48-hour lock-in. SUBASE Groton, building TBD.
-        For people already on base or already allowed on. Not a public
-        walk-up. Virtual is for that same circle if they cannot make the room.
+        This is a free virtual event. Join from anywhere. Hours are Saturday,
+        November 14, 09:00–17:00 ET, and Sunday, November 15, 12:00–17:00 ET,
+        all online.
       </p>
       <div className="mt-8 grid gap-6">
-        <Agenda title="Saturday Nov 14 · 09:00–17:00" rows={day1} />
-        <Agenda title="Sunday Nov 15 · 12:00–17:00" rows={day2} />
+        <Agenda title="Saturday Nov 14 · 09:00–17:00 ET" rows={day1} />
+        <Agenda title="Sunday Nov 15 · 12:00–17:00 ET" rows={day2} />
       </div>
     </div>
   );

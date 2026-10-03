@@ -23,11 +23,11 @@ export const metadata: Metadata = {
     template: "%s · Space Apps Groton",
   },
   description:
-    "Groton local event for the NASA Space Apps Challenge — November 14–15, 2026. Venue TBD (on-base Groton).",
+    "Groton’s first NASA Space Apps Challenge is a free virtual event. November 14–15, 2026. Join from anywhere.",
   openGraph: {
     title: "NASA Space Apps Challenge · Groton 2026",
     description:
-      "Join Groton for a weekend of open-source collaboration solving real Earth and space challenges.",
+      "A free virtual event, November 14–15, 2026. Join from anywhere.",
     type: "website",
   },
 };

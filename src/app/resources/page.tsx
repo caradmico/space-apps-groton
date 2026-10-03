@@ -5,13 +5,12 @@ export const metadata: Metadata = { title: "Resources" };
 const binLodHref = `${process.env.PAGES_BASE_PATH || ""}/bin-lod/`;
 
 const links = [
-  { label: "StarIS BIN LOD (Spark)", href: binLodHref, note: "Massive 62-byte .BIN catalog in-browser — far generalized, near accurate. $0 Pages, no Storage." },
-  { label: "Star Visualizer (StarIS)", href: "https://staris-b01f2.firebaseapp.com/", note: "Explore nearby stars — free demo linked from Groton (Path A, no billing)" },
+  { label: "StarIS BIN LOD (Spark)", href: binLodHref, note: "Massive 62-byte .BIN catalog in the browser. Far view is generalized, near view is accurate." },
+  { label: "Star Visualizer (StarIS)", href: "https://staris-b01f2.firebaseapp.com/", note: "Explore nearby stars. Free demo linked from Groton." },
   { label: "Official Groton local event page", href: "https://www.spaceappschallenge.org/2026/local-events/groton", note: "Register is open." },
   { label: "NASA Space Apps Challenge", href: "https://www.spaceappschallenge.org/", note: "Global program home" },
-  { label: "Challenge summaries", href: "https://www.spaceappschallenge.org/", note: "Coming September 17, 2026" },
-  { label: "Full challenge statements", href: "https://www.spaceappschallenge.org/", note: "Coming October 28, 2026" },
-  { label: "Ops board (internal)", href: "", note: "Space Boi flagship plan" },
+  { label: "Challenge summaries", href: "https://www.spaceappschallenge.org/", note: "Available now." },
+  { label: "Full challenge statements", href: "https://www.spaceappschallenge.org/", note: "Will be released October 28, 2026." },
 ];
 
 export default function ResourcesPage() {
@@ -19,7 +18,7 @@ export default function ResourcesPage() {
     <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
       <h1 className="text-3xl font-bold tracking-tight">Resources</h1>
       <p className="mt-3 max-w-2xl text-muted">
-        Official links and timing. Use 2026 NASA Space Apps Challenge logos only — no NASA meatball/worm.
+        Official links and timing for the free virtual Groton event.
       </p>
       <ul className="mt-8 space-y-3">
         {links.map((l) => (
