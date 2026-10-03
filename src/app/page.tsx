@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { SponsorStrip } from "@/components/SponsorStrip";
 
 const official =
   "https://www.spaceappschallenge.org/2026/local-events/groton";
@@ -9,18 +8,32 @@ export default function HomePage() {
     <div className="starfield">
       <section className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neon">
-          Local event · Groton / SUBASE New London
+          Fully remote · Groton
         </p>
         <h1 className="mt-3 max-w-3xl text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
           NASA Space Apps Challenge
         </h1>
-        <p className="mt-4 max-w-2xl text-lg text-muted">
-          November 14–15, 2026. On-base Groton, building TBD. For sailors,
-          navy family, students already here, and navy-adjacent people with
-          access (Electric Boat and similar). Not a public walk-up. Going
-          off base is hard — so the hackathon comes to SUBASE. No coding
-          required.
-        </p>
+        <div className="mt-4 max-w-2xl space-y-4 text-lg text-muted">
+          <p>
+            Groton’s first NASA Space Apps Challenge weekend is fully remote
+            and free. Anyone in the community can join from wherever they are.
+            Navy people are welcome too.
+          </p>
+          <p>
+            No coding required. Teams of up to six use open NASA data.
+            Challenge summaries September 17; full statements October 28.
+            Register on the official Space Apps site starting August 26.
+          </p>
+          <p>
+            Hours are family hours, not a lock-in: Saturday 09:00–17:00 and
+            Sunday 12:00–17:00, all online. Under-18s only with a parent or
+            guardian who registers and attends with them.
+          </p>
+          <p>If Groton is not the fit, use the Space Apps Universal Event.</p>
+          <p>
+            This is a small community event. There is one judge and no prizes.
+          </p>
+        </div>
         <div className="mt-8 flex flex-wrap gap-3">
           <a
             href={official}
@@ -40,7 +53,7 @@ export default function HomePage() {
         <dl className="mt-12 grid gap-4 sm:grid-cols-3">
           {[
             ["When", "Sat Nov 14 · 09:00–17:00 · Sun Nov 15 · 12:00–17:00"],
-            ["Where", "SUBASE Groton · building TBD · already-allowed access"],
+            ["Where", "Fully remote · all online"],
             ["Challenges", "Summaries Sep 17 · full statements Oct 28"],
           ].map(([k, v]) => (
             <div
@@ -54,14 +67,6 @@ export default function HomePage() {
             </div>
           ))}
         </dl>
-        <div className="mt-8 max-w-2xl rounded-xl border border-border bg-surface/70 px-5 py-4 text-sm text-muted">
-          If you already belong on SUBASE, you belong in this room. Other
-          interested people: case by case. If Groton isn&apos;t the fit, use
-          the Space Apps Universal Event. Bring a laptop, charger, CAC or
-          ID, water bottle. Under-18s need a parent or guardian registered
-          and on-site. Local Collaborators: USO and MWR. Not NASA-funded.
-        </div>
-        <SponsorStrip />
       </section>
     </div>
   );

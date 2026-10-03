@@ -9,8 +9,7 @@ export function Footer() {
             Groton Local Event
           </p>
           <p className="mt-2 text-sm text-muted">
-            NASA Space Apps Challenge · November 14–15, 2026 · Venue TBD
-            (on-base Groton)
+            NASA Space Apps Challenge · November 14–15, 2026 · Fully remote
           </p>
         </div>
         <div>
@@ -22,13 +21,8 @@ export function Footer() {
               </Link>
             </li>
             <li>
-              <Link className="hover:text-neon" href="/volunteers">
-                Volunteer
-              </Link>
-            </li>
-            <li>
-              <Link className="hover:text-neon" href="/sponsors">
-                Sponsor
+              <Link className="hover:text-neon" href="/prizes">
+                Prizes
               </Link>
             </li>
             <li>
@@ -62,9 +56,7 @@ export function Footer() {
               </a>
             </li>
           </ul>
-          <p className="mt-4 text-xs text-muted">
-            Ops owned by Space Boi · Local Lead: Cara
-          </p>
+          <p className="mt-4 text-xs text-muted">Local lead: Cara</p>
         </div>
       </div>
     </footer>

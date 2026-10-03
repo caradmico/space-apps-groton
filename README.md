@@ -1,6 +1,6 @@
 # Space Apps Groton 2026
 
-Local event site for the **NASA Space Apps Challenge** -- Groton (Nov 14-15, 2026). Venue TBD (on-base Groton).
+Local event site for the **NASA Space Apps Challenge** -- Groton (Nov 14-15, 2026). Fully remote.
 
 WIP. Fun lane: after a mill exam ship, or weekend. Do not open as empty-cycle filler.
 
@@ -30,11 +30,9 @@ Next.js App Router -- TypeScript -- Tailwind CSS -- GitHub Pages static export
 
 | Route | Purpose |
 |-------|---------|
-| `/` | Landing -- dates, venue TBD, CTA, USO + MWR sponsor strip |
-| `/schedule` | Sample 2-day agenda (cannot start before 9:00 AM local; local judging optional) |
-| `/prizes` | Placeholder prize tiers |
-| `/volunteers` | Low-lift roles + Local Lead contact form (official event page) |
-| `/sponsors` | USO + MWR pitch placeholders + become-a-sponsor CTA |
+| `/` | Landing -- fully remote, dates, register link |
+| `/schedule` | Family-hours agenda, all online |
+| `/prizes` | One judge and no prizes |
 | `/resources` | Official links; challenges Sep 17 (summaries) / Oct 28 (full) |
 
 ## Run
