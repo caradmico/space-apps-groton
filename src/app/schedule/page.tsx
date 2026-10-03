@@ -4,7 +4,7 @@ export const metadata: Metadata = { title: "Schedule" };
 
 const day1 = [
   ["09:00", "Welcome and logistics"],
-  ["09:30", "Team formation. No coding required."],
+  ["09:30", "Team formation. No coding experience is required."],
   ["10:00–12:00", "Hacking"],
   ["12:00–13:00", "Lunch break"],
   ["13:00–16:00", "Hacking. Optional NASA data clinic around 14:00"],
@@ -41,15 +41,15 @@ function Agenda({ title, rows }: { title: string; rows: string[][] }) {
 export default function SchedulePage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
-      <h1 className="text-3xl font-bold tracking-tight">Family-hours schedule</h1>
+      <h1 className="text-3xl font-bold tracking-tight">Schedule</h1>
       <p className="mt-3 max-w-2xl text-muted">
-        Hours are family hours, not a lock-in. Saturday, November 14,
-        09:00–17:00 and Sunday, November 15, 12:00–17:00, all online. Anyone
-        in the community can join from wherever they are.
+        This is a free virtual event. Join from anywhere. Hours are Saturday,
+        November 14, 09:00–17:00 ET, and Sunday, November 15, 12:00–17:00 ET,
+        all online.
       </p>
       <div className="mt-8 grid gap-6">
-        <Agenda title="Saturday Nov 14 · 09:00–17:00" rows={day1} />
-        <Agenda title="Sunday Nov 15 · 12:00–17:00" rows={day2} />
+        <Agenda title="Saturday Nov 14 · 09:00–17:00 ET" rows={day1} />
+        <Agenda title="Sunday Nov 15 · 12:00–17:00 ET" rows={day2} />
       </div>
     </div>
   );
