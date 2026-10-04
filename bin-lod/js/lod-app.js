@@ -21,6 +21,9 @@
  * LOD:
  *   FAR  — stride-sample generalized points (one GPU buffer)
  *   NEAR — bounded accurate subset around the camera target (typed arrays only)
+ *
+ * Tiles stream in. The first tile that arrives is sampled and drawn immediately.
+ * Later tiles append into the same buffers and spatial indexes — no reload.
  */
 
 import * as THREE from "three";
@@ -83,6 +86,14 @@ const catalog = {
   tileCount: 0,
   tilesMeta: [],
   sourceLabel: "catalog.bin",
+  segments: [],
+  storage: null,
+  writeOffset: 0,
+  loadedTileCount: 0,
+  tileTotal: 0,
+  streamDone: false,
+  tileErrors: [],
+  layoutReady: false,
 };
 
 const lod = {
@@ -105,6 +116,33 @@ const gpu = {
 };
 
 const scratch = { x: 0, y: 0, z: 0, ux: 0, uy: 0, uz: 0 };
+
+let sceneStarted = false;
+let nearRefresh = () => {};
+let viewCamera = null;
+let viewControls = null;
+const trace = {
+  firstFrameMs: 0,
+  pointsDrawn: 0,
+  paints: [],
+  brightPixels: 0,
+  sampleBright: false,
+};
+
+function countBrightPixels(renderer) {
+  const gl = renderer.getContext();
+  const w = gl.drawingBufferWidth;
+  const h = gl.drawingBufferHeight;
+  if (!w || !h) return 0;
+  const pixels = new Uint8Array(w * h * 4);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  let bright = 0;
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 70) bright += 1;
+  }
+  return bright;
+}
 
 function setStatus(html, isError = false) {
   el.status.innerHTML = html;
@@ -298,10 +336,16 @@ function makePoints(pos, col, size, count) {
   posAttr.setUsage(THREE.DynamicDrawUsage);
   colAttr.setUsage(THREE.DynamicDrawUsage);
   sizeAttr.setUsage(THREE.DynamicDrawUsage);
+  if (count > 0) {
+    posAttr.count = count;
+    colAttr.count = count;
+    sizeAttr.count = count;
+  }
   geo.setAttribute("position", posAttr);
   geo.setAttribute("color", colAttr);
   geo.setAttribute("aSize", sizeAttr);
   geo.setDrawRange(0, count);
+  if (count > 0) geo.computeBoundingSphere();
   const material = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
@@ -351,72 +395,391 @@ async function fetchTileBuffer(tile) {
   return buffer;
 }
 
-async function loadCatalog() {
-  // Prefer multi-tile LOD batch; fall back to single catalog.bin.
-  try {
-    setStatus("Fetching <code>data/tiles.json</code>…");
-    const index = await loadTilesIndex();
-    const tiles = Array.isArray(index.tiles) ? index.tiles.slice() : [];
-    if (!tiles.length) throw new Error("tiles.json has no tiles");
+function sortTilesForLook(tiles) {
+  // Request the camera-nearest tile first so it usually arrives first.
+  // Whichever tile finishes first is still the one that paints.
+  const defaultLookRa = 280 * DEG2RAD;
+  const defaultLookDec = -5 * DEG2RAD;
+  const cosDec = Math.cos(defaultLookDec);
+  const lookUx = cosDec * Math.cos(defaultLookRa);
+  const lookUy = cosDec * Math.sin(defaultLookRa);
+  const lookUz = Math.sin(defaultLookDec);
+  tiles.sort(
+    (a, b) =>
+      tileCenterScore(b, lookUx, lookUy, lookUz) -
+      tileCenterScore(a, lookUx, lookUy, lookUz)
+  );
+}
 
-    // Load all small LOD tiles (each ≤~5 MB). Order: camera-nearest first for early paint.
-    // Default look: galactic-ish (+RA 280° region) then fill remaining.
-    const defaultLookRa = 280 * DEG2RAD;
-    const defaultLookDec = -5 * DEG2RAD;
-    const cosDec = Math.cos(defaultLookDec);
-    const lookUx = cosDec * Math.cos(defaultLookRa);
-    const lookUy = cosDec * Math.sin(defaultLookRa);
-    const lookUz = Math.sin(defaultLookDec);
-    tiles.sort(
-      (a, b) =>
-        tileCenterScore(b, lookUx, lookUy, lookUz) -
-        tileCenterScore(a, lookUx, lookUy, lookUz)
-    );
+function tileRecordEstimate(tile) {
+  if (Number.isFinite(tile.n_records) && tile.n_records > 0) return tile.n_records;
+  if (Number.isFinite(tile.bytes) && tile.bytes > 0) return Math.floor(tile.bytes / RECORD_SIZE);
+  return 0;
+}
 
-    setStatus(`Fetching <strong>${tiles.length}</strong> LOD tiles…`);
-    const buffers = await Promise.all(tiles.map((t) => fetchTileBuffer(t)));
-    let totalBytes = 0;
-    for (const b of buffers) totalBytes += b.byteLength;
-    const merged = new Uint8Array(totalBytes);
-    let offset = 0;
-    for (const b of buffers) {
-      merged.set(new Uint8Array(b), offset);
-      offset += b.byteLength;
+function farQuotas(tiles) {
+  const counts = tiles.map((tile) => tileRecordEstimate(tile));
+  const total = counts.reduce((sum, n) => sum + n, 0) || 1;
+  const quotas = new Map();
+  let assigned = 0;
+  tiles.forEach((tile, i) => {
+    let quota;
+    if (i === tiles.length - 1) {
+      quota = Math.max(0, FAR_BUDGET - assigned);
+    } else {
+      quota = Math.round((FAR_BUDGET * counts[i]) / total);
+      if (counts[i] > 0) quota = Math.max(1, quota);
+      quota = Math.min(quota, Math.max(0, FAR_BUDGET - assigned));
     }
-    const buffer = merged.buffer;
-    const count = Math.floor(buffer.byteLength / RECORD_SIZE);
-    catalog.buffer = buffer;
-    catalog.view = new DataView(buffer);
-    catalog.count = count;
-    catalog.layout = detectLayout(catalog.view, count);
-    catalog.tileCount = tiles.length;
-    catalog.tilesMeta = tiles;
-    catalog.sourceLabel = `${tiles.length} tiles`;
-    setStatus(
-      `Loaded <strong>${tiles.length}</strong> tiles · ${count.toLocaleString()} records · ${(totalBytes / (1024 * 1024)).toFixed(1)} MiB`
-    );
-    return count;
-  } catch (tileErr) {
-    console.warn("Multi-tile load failed; falling back to catalog.bin", tileErr);
-    setStatus("Fetching <code>data/catalog.bin</code> as bytes…");
-    const res = await fetch("data/catalog.bin", { cache: "no-cache" });
-    if (!res.ok) {
-      throw new Error(`Failed to load tiles.json (${tileErr.message}) and catalog.bin (${res.status})`);
-    }
-    const buffer = await res.arrayBuffer();
-    if (buffer.byteLength < RECORD_SIZE) {
-      throw new Error("catalog.bin is too small to hold one 62-byte record");
-    }
-    const count = Math.floor(buffer.byteLength / RECORD_SIZE);
-    catalog.buffer = buffer;
-    catalog.view = new DataView(buffer);
-    catalog.count = count;
-    catalog.layout = detectLayout(catalog.view, count);
-    catalog.tileCount = 1;
-    catalog.tilesMeta = [];
-    catalog.sourceLabel = "catalog.bin";
-    return count;
+    quota = Math.min(quota, counts[i] > 0 ? counts[i] : quota);
+    assigned += quota;
+    quotas.set(tile.id, quota);
+  });
+  return quotas;
+}
+
+function loadedBytes() {
+  if (catalog.writeOffset > 0) return catalog.writeOffset;
+  if (catalog.buffer) return catalog.buffer.byteLength;
+  return 0;
+}
+
+function ensureStorage(minBytes) {
+  const need = Math.max(minBytes, RECORD_SIZE);
+  if (catalog.storage && catalog.storage.length >= need) return;
+  const nextLen = catalog.storage ? Math.max(need, catalog.storage.length * 2) : need;
+  const next = new Uint8Array(nextLen);
+  if (catalog.storage && catalog.writeOffset > 0) {
+    next.set(catalog.storage.subarray(0, catalog.writeOffset), 0);
   }
+  catalog.storage = next;
+  catalog.buffer = next.buffer;
+  catalog.view = new DataView(catalog.buffer);
+}
+
+function ensureFarBuffers() {
+  if (gpu.farPos) return;
+  gpu.farPos = new Float32Array(FAR_BUDGET * 3);
+  gpu.farCol = new Float32Array(FAR_BUDGET * 3);
+  gpu.farSize = new Float32Array(FAR_BUDGET);
+}
+
+function ensureNearBuffers() {
+  if (gpu.nearPos) return;
+  gpu.nearPos = new Float32Array(NEAR_BUDGET * 3);
+  gpu.nearCol = new Float32Array(NEAR_BUDGET * 3);
+  gpu.nearSize = new Float32Array(NEAR_BUDGET);
+}
+
+function appendTileBytes(buffer) {
+  const raw = new Uint8Array(buffer);
+  const bytes = raw.byteLength - (raw.byteLength % RECORD_SIZE);
+  const count = bytes / RECORD_SIZE;
+  ensureStorage(catalog.writeOffset + bytes);
+  catalog.storage.set(raw.subarray(0, bytes), catalog.writeOffset);
+  const seg = {
+    base: catalog.count,
+    count,
+    bbox: null,
+    cellStart: null,
+    cellCount: null,
+    cellIndex: null,
+    valid: 0,
+  };
+  catalog.writeOffset += bytes;
+  catalog.count += count;
+  catalog.segments.push(seg);
+  catalog.loadedTileCount += 1;
+  return seg;
+}
+
+function emptyFrameStats() {
+  return {
+    minX: Infinity,
+    minY: Infinity,
+    minZ: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity,
+    maxZ: -Infinity,
+    frameMinX: Infinity,
+    frameMinY: Infinity,
+    frameMinZ: Infinity,
+    frameMaxX: -Infinity,
+    frameMaxY: -Infinity,
+    frameMaxZ: -Infinity,
+    sumUx: 0,
+    sumUy: 0,
+    sumUz: 0,
+    valid: 0,
+  };
+}
+
+function accumulateFrame(stats, pos) {
+  stats.valid += 1;
+  if (pos.x < stats.minX) stats.minX = pos.x;
+  if (pos.y < stats.minY) stats.minY = pos.y;
+  if (pos.z < stats.minZ) stats.minZ = pos.z;
+  if (pos.x > stats.maxX) stats.maxX = pos.x;
+  if (pos.y > stats.maxY) stats.maxY = pos.y;
+  if (pos.z > stats.maxZ) stats.maxZ = pos.z;
+  const fx = pos.ux * SKY_RADIUS;
+  const fy = pos.uy * SKY_RADIUS;
+  const fz = pos.uz * SKY_RADIUS;
+  stats.sumUx += pos.ux;
+  stats.sumUy += pos.uy;
+  stats.sumUz += pos.uz;
+  if (fx < stats.frameMinX) stats.frameMinX = fx;
+  if (fy < stats.frameMinY) stats.frameMinY = fy;
+  if (fz < stats.frameMinZ) stats.frameMinZ = fz;
+  if (fx > stats.frameMaxX) stats.frameMaxX = fx;
+  if (fy > stats.frameMaxY) stats.frameMaxY = fy;
+  if (fz > stats.frameMaxZ) stats.frameMaxZ = fz;
+}
+
+function applyFrameFromStats(stats) {
+  if (catalog.layout === "radec") {
+    const dirLen = Math.hypot(stats.sumUx, stats.sumUy, stats.sumUz) || 1;
+    const frameExtent = Math.max(
+      stats.frameMaxX - stats.frameMinX,
+      stats.frameMaxY - stats.frameMinY,
+      stats.frameMaxZ - stats.frameMinZ,
+      0.08
+    );
+    setFrame(
+      (stats.sumUx / dirLen) * SKY_RADIUS,
+      (stats.sumUy / dirLen) * SKY_RADIUS,
+      (stats.sumUz / dirLen) * SKY_RADIUS,
+      frameExtent
+    );
+    return;
+  }
+  const targetX = (stats.minX + stats.maxX) * 0.5;
+  const targetY = (stats.minY + stats.maxY) * 0.5;
+  const targetZ = (stats.minZ + stats.maxZ) * 0.5;
+  const frameExtent = Math.max(
+    stats.maxX - stats.minX,
+    stats.maxY - stats.minY,
+    stats.maxZ - stats.minZ,
+    0.08
+  );
+  setFrame(targetX, targetY, targetZ, frameExtent);
+}
+
+function sampleFarRange(base, count, quota, stats) {
+  if (count <= 0 || quota <= 0) return;
+  const stride = Math.max(1, Math.floor(count / quota));
+  const farCap = Math.min(FAR_BUDGET, lod.farCount + quota);
+  const { view } = catalog;
+  const pos = scratch;
+  let far = lod.farCount;
+
+  for (let i = 0; i < count; i += stride) {
+    let pick = -1;
+    let bestMag = Infinity;
+    const end = Math.min(i + stride, count);
+    for (let j = i; j < end; j++) {
+      const record = base + j;
+      if (!readStar(view, record, pos)) continue;
+      if (stats) accumulateFrame(stats, pos);
+      const mag = readMag(view, record);
+      if (mag < bestMag) {
+        bestMag = mag;
+        pick = j;
+      }
+    }
+    if (pick >= 0 && far < farCap) {
+      const record = base + pick;
+      readStar(view, record, pos);
+      gpu.farPos[far * 3] = pos.x;
+      gpu.farPos[far * 3 + 1] = pos.y;
+      gpu.farPos[far * 3 + 2] = pos.z;
+      writeAppearance(
+        gpu.farCol,
+        gpu.farSize,
+        far,
+        readColorClass(view, record),
+        bestMag,
+        0.55
+      );
+      far += 1;
+    }
+  }
+  lod.farCount = far;
+}
+
+function publishFar() {
+  if (!gpu.far) return;
+  const n = lod.farCount;
+  const geo = gpu.far.geometry;
+  const pos = geo.attributes.position;
+  const col = geo.attributes.color;
+  const size = geo.attributes.aSize;
+  pos.count = n;
+  col.count = n;
+  size.count = n;
+  pos.needsUpdate = true;
+  col.needsUpdate = true;
+  size.needsUpdate = true;
+  geo.setDrawRange(0, n);
+  if (n > 0) geo.computeBoundingSphere();
+}
+
+function buildSegmentIndex(seg) {
+  const { view } = catalog;
+  const { base, count } = seg;
+  const pos = scratch;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  let valid = 0;
+
+  for (let i = 0; i < count; i++) {
+    if (!readStar(view, base + i, pos)) continue;
+    valid += 1;
+    if (pos.x < minX) minX = pos.x;
+    if (pos.y < minY) minY = pos.y;
+    if (pos.z < minZ) minZ = pos.z;
+    if (pos.x > maxX) maxX = pos.x;
+    if (pos.y > maxY) maxY = pos.y;
+    if (pos.z > maxZ) maxZ = pos.z;
+  }
+
+  seg.valid = valid;
+  catalog.validCount += valid;
+  if (valid === 0) return;
+
+  const pad = catalog.layout === "radec" ? Math.max(SKY_RADIUS * 0.02, 1.5) : 1.5;
+  const bbox = {
+    minX: minX - pad,
+    minY: minY - pad,
+    minZ: minZ - pad,
+    maxX: maxX + pad,
+    maxY: maxY + pad,
+    maxZ: maxZ + pad,
+  };
+  bbox.sx = Math.max(bbox.maxX - bbox.minX, 1);
+  bbox.sy = Math.max(bbox.maxY - bbox.minY, 1);
+  bbox.sz = Math.max(bbox.maxZ - bbox.minZ, 1);
+  seg.bbox = bbox;
+
+  const cellN = GRID * GRID * GRID;
+  const counts = new Uint32Array(cellN);
+  for (let i = 0; i < count; i++) {
+    if (!readStar(view, base + i, pos)) continue;
+    counts[cellOf(pos.x, pos.y, pos.z, bbox)] += 1;
+  }
+
+  const start = new Uint32Array(cellN);
+  let running = 0;
+  for (let c = 0; c < cellN; c++) {
+    start[c] = running;
+    running += counts[c];
+  }
+
+  const index = new Uint32Array(valid);
+  const cursor = start.slice();
+  for (let i = 0; i < count; i++) {
+    if (!readStar(view, base + i, pos)) continue;
+    const c = cellOf(pos.x, pos.y, pos.z, bbox);
+    index[cursor[c]] = base + i;
+    cursor[c] += 1;
+  }
+
+  seg.cellStart = start;
+  seg.cellCount = counts;
+  seg.cellIndex = index;
+}
+
+let ingestChain = Promise.resolve();
+
+function enqueueIngest(fn) {
+  const run = ingestChain.then(fn);
+  ingestChain = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
+}
+
+async function ingestTile(tile, buffer, quota) {
+  if (!catalog.layoutReady) {
+    const probe = new DataView(buffer);
+    catalog.layout = detectLayout(probe, Math.floor(buffer.byteLength / RECORD_SIZE));
+    catalog.layoutReady = true;
+  }
+
+  const seg = appendTileBytes(buffer);
+  const stats = sceneStarted ? null : emptyFrameStats();
+  sampleFarRange(seg.base, seg.count, quota, stats);
+
+  if (!sceneStarted && lod.farCount > 0 && stats && stats.valid > 0) {
+    applyFrameFromStats(stats);
+    ensureNearBuffers();
+    initScene();
+    updateHud();
+    trace.paints.push({
+      id: tile.id,
+      loaded: catalog.loadedTileCount,
+      far: lod.farCount,
+      records: catalog.count,
+      t: performance.now(),
+    });
+    await yieldFrame();
+  } else if (sceneStarted) {
+    publishFar();
+    updateHud();
+    trace.paints.push({
+      id: tile.id,
+      loaded: catalog.loadedTileCount,
+      far: lod.farCount,
+      records: catalog.count,
+      t: performance.now(),
+    });
+    await yieldFrame();
+  }
+
+  buildSegmentIndex(seg);
+  if (sceneStarted) nearRefresh();
+}
+
+async function streamTiles(index, tiles) {
+  sortTilesForLook(tiles);
+  catalog.tileTotal = tiles.length;
+  catalog.tileCount = tiles.length;
+  catalog.tilesMeta = tiles;
+  catalog.sourceLabel = `${tiles.length} tiles`;
+  const hintedBytes =
+    Number(index.total_bytes) ||
+    tiles.reduce((sum, tile) => sum + (Number(tile.bytes) || 0), 0);
+  ensureStorage(Math.max(hintedBytes, RECORD_SIZE));
+  ensureFarBuffers();
+  ensureNearBuffers();
+
+  const quotas = farQuotas(tiles);
+  setStatus(
+    `Fetching <strong>${tiles.length}</strong> LOD tiles. Stars draw as soon as the first one arrives…`
+  );
+
+  await Promise.all(
+    tiles.map((tile) =>
+      fetchTileBuffer(tile)
+        .then((buffer) => enqueueIngest(() => ingestTile(tile, buffer, quotas.get(tile.id) || 0)))
+        .catch((err) => {
+          console.warn(err);
+          catalog.tileErrors.push(err && err.message ? err.message : String(err));
+        })
+    )
+  );
+
+  catalog.streamDone = true;
+  if (!sceneStarted || catalog.count === 0) {
+    const detail = catalog.tileErrors[0] || "No finite positions in LOD tiles";
+    throw new Error(detail);
+  }
+  updateHud();
 }
 
 async function buildFarAndIndex() {
@@ -586,70 +949,72 @@ async function buildFarAndIndex() {
   catalog.cellStart = start;
   catalog.cellCount = counts;
   catalog.cellIndex = index;
+  catalog.segments.push({
+    base: 0,
+    count,
+    bbox,
+    cellStart: start,
+    cellCount: counts,
+    cellIndex: index,
+    valid,
+  });
+  catalog.loadedTileCount = Math.max(catalog.loadedTileCount, 1);
+  if (!catalog.writeOffset) catalog.writeOffset = catalog.buffer.byteLength;
 
-  gpu.nearPos = new Float32Array(NEAR_BUDGET * 3);
-  gpu.nearCol = new Float32Array(NEAR_BUDGET * 3);
-  gpu.nearSize = new Float32Array(NEAR_BUDGET);
+  ensureNearBuffers();
+}
+
+function cellRange(minValue, maxValue, minBound, span) {
+  return [
+    Math.min(GRID - 1, Math.max(0, Math.floor(((minValue - minBound) / span) * GRID))),
+    Math.min(GRID - 1, Math.max(0, Math.floor(((maxValue - minBound) / span) * GRID))),
+  ];
 }
 
 function fillNear(target) {
-  const { view, bbox, cellStart, cellCount, cellIndex } = catalog;
-  if (!bbox) return 0;
+  const { view, segments } = catalog;
+  if (!segments.length) return 0;
 
   const r = catalog.nearRadius;
   const r2 = r * r;
-  const minIX = Math.min(
-    GRID - 1,
-    Math.max(0, Math.floor(((target.x - r - bbox.minX) / bbox.sx) * GRID))
-  );
-  const maxIX = Math.min(
-    GRID - 1,
-    Math.max(0, Math.floor(((target.x + r - bbox.minX) / bbox.sx) * GRID))
-  );
-  const minIY = Math.min(
-    GRID - 1,
-    Math.max(0, Math.floor(((target.y - r - bbox.minY) / bbox.sy) * GRID))
-  );
-  const maxIY = Math.min(
-    GRID - 1,
-    Math.max(0, Math.floor(((target.y + r - bbox.minY) / bbox.sy) * GRID))
-  );
-  const minIZ = Math.min(
-    GRID - 1,
-    Math.max(0, Math.floor(((target.z - r - bbox.minZ) / bbox.sz) * GRID))
-  );
-  const maxIZ = Math.min(
-    GRID - 1,
-    Math.max(0, Math.floor(((target.z + r - bbox.minZ) / bbox.sz) * GRID))
-  );
-
   const pos = scratch;
   let n = 0;
-  for (let iz = minIZ; iz <= maxIZ; iz++) {
-    for (let iy = minIY; iy <= maxIY; iy++) {
-      for (let ix = minIX; ix <= maxIX; ix++) {
-        const c = ix + iy * GRID + iz * GRID * GRID;
-        const begin = cellStart[c];
-        const end = begin + cellCount[c];
-        for (let k = begin; k < end && n < NEAR_BUDGET; k++) {
-          const i = cellIndex[k];
-          if (!readStar(view, i, pos)) continue;
-          const dx = pos.x - target.x;
-          const dy = pos.y - target.y;
-          const dz = pos.z - target.z;
-          if (dx * dx + dy * dy + dz * dz > r2) continue;
-          gpu.nearPos[n * 3] = pos.x;
-          gpu.nearPos[n * 3 + 1] = pos.y;
-          gpu.nearPos[n * 3 + 2] = pos.z;
-          writeAppearance(
-            gpu.nearCol,
-            gpu.nearSize,
-            n,
-            readColorClass(view, i),
-            readMag(view, i),
-            0.72
-          );
-          n += 1;
+
+  for (let s = 0; s < segments.length && n < NEAR_BUDGET; s++) {
+    const seg = segments[s];
+    const { bbox, cellStart, cellCount, cellIndex } = seg;
+    if (!bbox || !cellStart || !cellCount || !cellIndex) continue;
+
+    const [minIX, maxIX] = cellRange(target.x - r, target.x + r, bbox.minX, bbox.sx);
+    const [minIY, maxIY] = cellRange(target.y - r, target.y + r, bbox.minY, bbox.sy);
+    const [minIZ, maxIZ] = cellRange(target.z - r, target.z + r, bbox.minZ, bbox.sz);
+
+    for (let iz = minIZ; iz <= maxIZ && n < NEAR_BUDGET; iz++) {
+      for (let iy = minIY; iy <= maxIY && n < NEAR_BUDGET; iy++) {
+        for (let ix = minIX; ix <= maxIX && n < NEAR_BUDGET; ix++) {
+          const c = ix + iy * GRID + iz * GRID * GRID;
+          const begin = cellStart[c];
+          const end = begin + cellCount[c];
+          for (let k = begin; k < end && n < NEAR_BUDGET; k++) {
+            const i = cellIndex[k];
+            if (!readStar(view, i, pos)) continue;
+            const dx = pos.x - target.x;
+            const dy = pos.y - target.y;
+            const dz = pos.z - target.z;
+            if (dx * dx + dy * dy + dz * dz > r2) continue;
+            gpu.nearPos[n * 3] = pos.x;
+            gpu.nearPos[n * 3 + 1] = pos.y;
+            gpu.nearPos[n * 3 + 2] = pos.z;
+            writeAppearance(
+              gpu.nearCol,
+              gpu.nearSize,
+              n,
+              readColorClass(view, i),
+              readMag(view, i),
+              0.72
+            );
+            n += 1;
+          }
         }
       }
     }
@@ -657,42 +1022,60 @@ function fillNear(target) {
 
   lod.nearCount = n;
   if (gpu.near) {
-    gpu.near.geometry.attributes.position.needsUpdate = true;
-    gpu.near.geometry.attributes.color.needsUpdate = true;
-    gpu.near.geometry.attributes.aSize.needsUpdate = true;
-    gpu.near.geometry.setDrawRange(0, n);
-    gpu.near.geometry.computeBoundingSphere();
+    const geo = gpu.near.geometry;
+    if (n > 0) {
+      geo.attributes.position.count = n;
+      geo.attributes.color.count = n;
+      geo.attributes.aSize.count = n;
+      geo.computeBoundingSphere();
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.color.needsUpdate = true;
+    geo.attributes.aSize.needsUpdate = true;
+    geo.setDrawRange(0, n);
   }
   return n;
 }
 
 function updateHud() {
-  const mb = (catalog.buffer.byteLength / (1024 * 1024)).toFixed(2);
+  const mb = (loadedBytes() / (1024 * 1024)).toFixed(2);
   const layoutNote =
     catalog.layout === "radec"
       ? "GaiaSource RA/Dec → Cartesian"
       : "StarIS precomputed xyz × 206265";
-  const tileNote =
-    catalog.tileCount > 1
-      ? `${catalog.tileCount} tiles`
-      : catalog.sourceLabel;
+  const total = catalog.tileTotal || catalog.tileCount;
+  const loaded = catalog.loadedTileCount;
+  const tileNote = total > 1 ? `${loaded}/${total} tiles` : catalog.sourceLabel;
+  const waiting = total > 1 && loaded < total;
   el.mode.textContent = lod.mode === "near" ? "LOD NEAR" : "LOD FAR";
   el.mode.dataset.mode = lod.mode;
   el.count.textContent = `${lod.farCount.toLocaleString()} far · ${lod.nearCount.toLocaleString()} near · ${tileNote}`;
+  const farLine =
+    total > 1
+      ? `FAR sample ${lod.farCount.toLocaleString()} from tiles that have arrived`
+      : `FAR stride ${catalog.stride} → ${lod.farCount.toLocaleString()} generalized across loaded tiles`;
+  const errNote = catalog.tileErrors.length
+    ? `<br>${catalog.tileErrors.length} tile${catalog.tileErrors.length === 1 ? "" : "s"} failed to load`
+    : "";
   setStatus(
-    `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB · ${tileNote} · 62 B LE · ${layoutNote}<br>` +
-      `FAR stride ${catalog.stride} → ${lod.farCount.toLocaleString()} generalized across loaded tiles<br>` +
-      (lod.mode === "near"
-        ? `NEAR accurate subset ${lod.nearCount.toLocaleString()} (cap ${NEAR_BUDGET.toLocaleString()}) within ${catalog.nearRadius.toFixed(1)} of target`
-        : `Zoom in toward a region to load an accurate nearby subset`) +
+    `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB loaded · ${tileNote} · 62 B LE · ${layoutNote}<br>` +
+      `${farLine}<br>` +
+      (waiting
+        ? `Showing stars from the first tiles in. The rest fill in on this same view.`
+        : lod.mode === "near"
+          ? `NEAR accurate subset ${lod.nearCount.toLocaleString()} (cap ${NEAR_BUDGET.toLocaleString()}) within ${catalog.nearRadius.toFixed(1)} of target`
+          : `Zoom in toward a region to load an accurate nearby subset`) +
+      errNote +
       `<br>No full star-object array. Drag to orbit · scroll to zoom · right-drag to pan`
   );
 }
 
 function initScene() {
+  if (sceneStarted) return;
   const frame = catalog.frame;
   const scene = new THREE.Scene();
-  const fogDensity = Math.min(0.012, 0.45 / Math.max(frame.dist, 8));
+  const fogDist = catalog.tileTotal > 1 ? Math.max(frame.dist, SKY_RADIUS * 2) : frame.dist;
+  const fogDensity = Math.min(0.012, 0.45 / Math.max(fogDist, 8));
   scene.fog = new THREE.FogExp2(0x05070d, fogDensity);
 
   const camera = new THREE.PerspectiveCamera(
@@ -714,8 +1097,12 @@ function initScene() {
   controls.dampingFactor = 0.06;
   controls.enablePan = true;
   controls.minDistance = Math.max(frame.extent * 0.12, 0.4);
-  controls.maxDistance = Math.max(frame.extent * 14, frame.dist * 6);
+  const skyReach = catalog.tileTotal > 1 ? SKY_RADIUS * 16 : 0;
+  controls.maxDistance = Math.max(frame.extent * 14, frame.dist * 6, skyReach);
   controls.target.set(frame.targetX, frame.targetY, frame.targetZ);
+
+  viewCamera = camera;
+  viewControls = controls;
 
   gpu.far = makePoints(gpu.farPos, gpu.farCol, gpu.farSize, lod.farCount);
   gpu.near = makePoints(gpu.nearPos, gpu.nearCol, gpu.nearSize, 0);
@@ -766,34 +1153,162 @@ function initScene() {
     }
   }
 
+  nearRefresh = () => {
+    const dist = camera.position.distanceTo(controls.target);
+    const wantNear = lod.mode === "near" ? dist < catalog.nearExit : dist < catalog.nearEnter;
+    if (!wantNear && lod.mode !== "near") return;
+    fillNear(controls.target);
+    gpu.near.visible = lod.nearCount > 0;
+    if (lod.nearCount > 0) {
+      lod.mode = "near";
+      lod.lastTarget.copy(controls.target);
+      lod.lastDist = dist;
+    }
+    updateHud();
+  };
+
   function animate() {
     requestAnimationFrame(animate);
     controls.update();
     maybeRefreshNear();
     renderer.render(scene, camera);
+    trace.pointsDrawn = renderer.info.render.points;
+    if (!trace.firstFrameMs && trace.pointsDrawn > 0) {
+      trace.firstFrameMs = performance.now();
+    }
+    if (trace.sampleBright) {
+      trace.brightPixels = countBrightPixels(renderer);
+      trace.sampleBright = false;
+    }
   }
   animate();
+  sceneStarted = true;
+}
+
+function resetStreamBuffers() {
+  catalog.segments = [];
+  catalog.storage = null;
+  catalog.buffer = null;
+  catalog.view = null;
+  catalog.count = 0;
+  catalog.validCount = 0;
+  catalog.writeOffset = 0;
+  catalog.loadedTileCount = 0;
+  catalog.tileTotal = 0;
+  catalog.streamDone = false;
+  lod.farCount = 0;
+  gpu.farPos = null;
+  gpu.farCol = null;
+  gpu.farSize = null;
+}
+
+async function loadSingleCatalog(cause) {
+  console.warn("Multi-tile load failed; falling back to catalog.bin", cause);
+  resetStreamBuffers();
+  setStatus("Fetching <code>data/catalog.bin</code> as bytes…");
+  const res = await fetch("data/catalog.bin", { cache: "no-cache" });
+  if (!res.ok) {
+    const why = cause && cause.message ? cause.message : "tiles unavailable";
+    throw new Error(`Failed to load tiles.json (${why}) and catalog.bin (${res.status})`);
+  }
+  const buffer = await res.arrayBuffer();
+  if (buffer.byteLength < RECORD_SIZE) {
+    throw new Error("catalog.bin is too small to hold one 62-byte record");
+  }
+  const count = Math.floor(buffer.byteLength / RECORD_SIZE);
+  catalog.buffer = buffer;
+  catalog.view = new DataView(buffer);
+  catalog.count = count;
+  catalog.layout = detectLayout(catalog.view, count);
+  catalog.layoutReady = true;
+  catalog.tileCount = 1;
+  catalog.tileTotal = 1;
+  catalog.tilesMeta = [];
+  catalog.sourceLabel = "catalog.bin";
+  catalog.writeOffset = buffer.byteLength;
+  return count;
 }
 
 async function main() {
   try {
-    await loadCatalog();
-    setStatus(
-      `Building FAR stride + spatial index over <strong>${catalog.count.toLocaleString()}</strong> records…`
-    );
-    await buildFarAndIndex();
-    initScene();
-    updateHud();
-  } catch (err) {
-    console.error(err);
-    setStatus(
-      `Could not load <code>data/catalog.bin</code>. ${err.message}<br>` +
-        `Drop a GaiaSource 62-byte LE shard (RA/Dec at +8/+16) or a StarIS xyz catalog as <code>data/catalog.bin</code>.`,
-      true
-    );
-    el.count.textContent = "0 drawn";
-    el.mode.textContent = "LOD error";
+    setStatus("Fetching <code>data/tiles.json</code>…");
+    const index = await loadTilesIndex();
+    const tiles = Array.isArray(index.tiles) ? index.tiles.slice() : [];
+    if (!tiles.length) throw new Error("tiles.json has no tiles");
+    await streamTiles(index, tiles);
+  } catch (tileErr) {
+    if (sceneStarted && catalog.count > 0) {
+      console.warn(tileErr);
+      catalog.streamDone = true;
+      updateHud();
+      return;
+    }
+    try {
+      await loadSingleCatalog(tileErr);
+      setStatus(
+        `Building FAR stride + spatial index over <strong>${catalog.count.toLocaleString()}</strong> records…`
+      );
+      await buildFarAndIndex();
+      initScene();
+      updateHud();
+    } catch (err) {
+      console.error(err);
+      setStatus(
+        `Could not load <code>data/catalog.bin</code>. ${err.message}<br>` +
+          `Drop a GaiaSource 62-byte LE shard (RA/Dec at +8/+16) or a StarIS xyz catalog as <code>data/catalog.bin</code>.`,
+        true
+      );
+      el.count.textContent = "0 drawn";
+      el.mode.textContent = "LOD error";
+    }
   }
 }
+
+function frameDirection(ux, uy, uz, dist = 28) {
+  if (!viewCamera || !viewControls) return false;
+  const len = Math.hypot(ux, uy, uz) || 1;
+  const ox = ux / len;
+  const oy = uy / len;
+  const oz = uz / len;
+  const reach = Number.isFinite(dist) ? dist : 28;
+  const tx = ox * SKY_RADIUS;
+  const ty = oy * SKY_RADIUS;
+  const tz = oz * SKY_RADIUS;
+  viewControls.target.set(tx, ty, tz);
+  viewCamera.position.set(tx + ox * reach, ty + oy * reach, tz + oz * reach);
+  viewCamera.lookAt(tx, ty, tz);
+  viewCamera.updateProjectionMatrix();
+  viewControls.update();
+  return true;
+}
+
+window.__BIN_LOD = {
+  snapshot() {
+    return {
+      painted: sceneStarted,
+      firstFrameMs: trace.firstFrameMs,
+      pointsDrawn: trace.pointsDrawn,
+      brightPixels: trace.brightPixels,
+      farCount: lod.farCount,
+      nearCount: lod.nearCount,
+      records: catalog.count,
+      loadedTiles: catalog.loadedTileCount,
+      tileTotal: catalog.tileTotal,
+      layout: catalog.layout,
+      streamDone: catalog.streamDone,
+      paints: trace.paints.map((paint) => ({ ...paint })),
+      errors: catalog.tileErrors.slice(),
+      mode: lod.mode,
+      target: viewControls
+        ? [viewControls.target.x, viewControls.target.y, viewControls.target.z]
+        : null,
+    };
+  },
+  requestBrightSample() {
+    trace.sampleBright = true;
+    trace.brightPixels = -1;
+  },
+  frameDirection,
+};
 
 main();
