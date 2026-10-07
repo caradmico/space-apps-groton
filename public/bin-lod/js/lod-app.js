@@ -745,6 +745,55 @@ async function ingestTile(tile, buffer, quota) {
   if (sceneStarted) nearRefresh();
 }
 
+const DOWNLOADS_AT_A_TIME = 2;
+
+function rememberTileError(err) {
+  console.warn(err);
+  catalog.tileErrors.push(err && err.message ? err.message : String(err));
+}
+
+function downloadTilesInOrder(tiles, quotas) {
+  let cursor = 0;
+  let active = 0;
+  let settled = 0;
+  if (!tiles.length) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const launch = () => {
+      while (active < DOWNLOADS_AT_A_TIME && cursor < tiles.length) {
+        const tile = tiles[cursor];
+        cursor += 1;
+        active += 1;
+        fetchTileBuffer(tile)
+          .then(
+            (buffer) => {
+              active -= 1;
+              launch();
+              return enqueueIngest(() => ingestTile(tile, buffer, quotas.get(tile.id) || 0));
+            },
+            (err) => {
+              active -= 1;
+              rememberTileError(err);
+              launch();
+            }
+          )
+          .then(
+            () => {
+              settled += 1;
+              if (settled === tiles.length) resolve();
+            },
+            (err) => {
+              rememberTileError(err);
+              settled += 1;
+              if (settled === tiles.length) resolve();
+            }
+          );
+      }
+    };
+    launch();
+  });
+}
+
 async function streamTiles(index, tiles) {
   sortTilesForLook(tiles);
   catalog.tileTotal = tiles.length;
@@ -763,16 +812,9 @@ async function streamTiles(index, tiles) {
     `Fetching <strong>${tiles.length}</strong> LOD tiles. Stars draw as soon as the first one arrives…`
   );
 
-  await Promise.all(
-    tiles.map((tile) =>
-      fetchTileBuffer(tile)
-        .then((buffer) => enqueueIngest(() => ingestTile(tile, buffer, quotas.get(tile.id) || 0)))
-        .catch((err) => {
-          console.warn(err);
-          catalog.tileErrors.push(err && err.message ? err.message : String(err));
-        })
-    )
-  );
+  // Two downloads at a time, in look order. A finished tile is ingested
+  // immediately and the freed slot starts the next file.
+  await downloadTilesInOrder(tiles, quotas);
 
   catalog.streamDone = true;
   if (!sceneStarted || catalog.count === 0) {

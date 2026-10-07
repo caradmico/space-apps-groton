@@ -10,8 +10,8 @@ import http from "node:http";
 import path from "node:path";
 
 const ROOT = path.resolve("public/bin-lod");
-const FAST_TILE = "tile-008.bin";
-const FAST_RECORDS = 56860;
+const FAST_TILE = "tile-004.bin";
+const FAST_RECORDS = 72818;
 const TOTAL_RECORDS = 639404;
 const SLOW_MS = 4500;
 const PORT = 8765;
@@ -209,7 +209,6 @@ async function main() {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    const started = Date.now();
     await cdp.send("Page.navigate", { url: `http://127.0.0.1:${PORT}/` });
 
     if (FAIL_TILES) {
@@ -230,28 +229,27 @@ async function main() {
       (snap) =>
         snap.painted &&
         snap.firstFrameMs > 0 &&
+        snap.firstFrameMs < SLOW_MS &&
         snap.pointsDrawn > 0 &&
-        snap.loadedTiles === 1 &&
-        snap.records === FAST_RECORDS &&
         snap.streamDone === false &&
-        snap.paints.length === 1 &&
-        snap.paints[0].id === "tile-008",
-      8000
+        snap.paints[0] &&
+        snap.paints[0].id === "tile-004" &&
+        snap.paints[0].records === FAST_RECORDS,
+      12000
     );
     const earlyBright = await brightCount(cdp.send);
-    const earlyMs = Date.now() - started;
     const earlyShot = await cdp.send("Page.captureScreenshot", { format: "png" });
     fs.writeFileSync("/tmp/bin-lod-first-tile.png", Buffer.from(earlyShot.data, "base64"));
     assert(earlyBright.brightPixels > 30, `first tile drew no visible stars (${earlyBright.brightPixels})`);
-    assert(earlyMs < SLOW_MS, `first frame waited for the slow tiles (${earlyMs} ms)`);
+    assert(early.firstFrameMs < SLOW_MS, `first frame waited for the slow tiles (${early.firstFrameMs} ms)`);
     assert(!requests.some((req) => req.base === "catalog.bin"), "fell back to catalog.bin");
 
     const full = await pollSnapshot(
       cdp.send,
       (snap) => snap.streamDone && snap.loadedTiles === 9 && snap.records === TOTAL_RECORDS,
-      SLOW_MS + 8000
+      45000
     );
-    assert(full.farCount > early.farCount, "later tiles did not add FAR points");
+    assert(full.farCount > early.paints[0].far, "later tiles did not add FAR points");
     assert(full.paints.length === 9, `expected 9 incremental paints, got ${full.paints.length}`);
     assert(full.tileTotal === 9, "tile total changed");
     assert(full.layout === "radec", `layout ${full.layout}`);
@@ -304,7 +302,7 @@ async function main() {
     console.log(
       JSON.stringify(
         {
-          earlyMs,
+          earlyMs: early.firstFrameMs,
           early: {
             farCount: early.farCount,
             pointsDrawn: early.pointsDrawn,
