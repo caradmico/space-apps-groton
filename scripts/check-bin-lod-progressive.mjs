@@ -52,7 +52,7 @@ function startServer() {
         res.end("missing");
         return;
       }
-      const delay = base.endsWith(".bin") && base !== FAST_TILE ? SLOW_MS : 0;
+      const delay = /^tile-.*\.bin$/.test(base) && base !== FAST_TILE ? SLOW_MS : 0;
       res.writeHead(200, {
         "content-type": contentType(file),
         "cache-control": "no-store",
@@ -233,8 +233,9 @@ async function main() {
         snap.pointsDrawn > 0 &&
         snap.streamDone === false &&
         snap.paints[0] &&
-        snap.paints[0].id === "tile-004" &&
-        snap.paints[0].records === FAST_RECORDS,
+        snap.paints[0].id === "preview" &&
+        snap.paints[0].records === 0 &&
+        snap.paints.some((paint) => paint.id === "tile-004" && paint.records === FAST_RECORDS),
       12000
     );
     const earlyBright = await brightCount(cdp.send);
@@ -249,8 +250,12 @@ async function main() {
       (snap) => snap.streamDone && snap.loadedTiles === 9 && snap.records === TOTAL_RECORDS,
       45000
     );
-    assert(full.farCount > early.paints[0].far, "later tiles did not add FAR points");
-    assert(full.paints.length === 9, `expected 9 incremental paints, got ${full.paints.length}`);
+    assert(full.previewFarCount === 0, "preview points were still drawn after the tiles filled FAR");
+    assert(full.tileFarCount > early.paints[0].far * 0.5, "tiles did not replace the preview");
+    assert(
+      full.paints.filter((paint) => paint.id !== "preview").length === 9,
+      `expected 9 tile paints, got ${full.paints.map((paint) => paint.id).join(",")}`
+    );
     assert(full.tileTotal === 9, "tile total changed");
     assert(full.layout === "radec", `layout ${full.layout}`);
     assert(full.errors.length === 0, `tile errors: ${full.errors.join("; ")}`);
@@ -290,10 +295,8 @@ async function main() {
       laterView.target && laterView.target[2] > 40,
       `camera did not move to the later tile (${JSON.stringify(laterView.target)})`
     );
-    assert(
-      early.target && early.target[2] < 20,
-      `first frame was not aimed at the arrived tile (${JSON.stringify(early.target)})`
-    );
+    assert(early.paints[0].records === 0, "preview was counted in the catalog");
+    assert(full.records === TOTAL_RECORDS, "preview records were added to the catalog");
 
     const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
     const shotPath = "/tmp/bin-lod-later-tile.png";
