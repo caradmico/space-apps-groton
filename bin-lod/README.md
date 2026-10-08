@@ -20,3 +20,5 @@ node public/bin-lod/scripts/build-preview.mjs
 
 ## Build note
 Raw Drive shards stay off Pages. Only LOD tiles are published.
+
+Headless checks use a global `WebSocket`. On Node 20, pass `--experimental-websocket` (`node --experimental-websocket scripts/check-bin-lod-progressive.mjs`, and the same flag for `scripts/check-bin-lod-throttle.mjs` and `scripts/check-bin-lod-fallback.mjs`).
