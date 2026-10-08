@@ -678,6 +678,35 @@ function publishFar() {
   if (n > 0) geo.computeBoundingSphere();
 }
 
+function clearPreviewState() {
+  lod.previewFarCount = 0;
+  lod.tileFarCount = 0;
+  lod.farCount = 0;
+  if (gpu.far) publishFar();
+}
+
+function retargetFarMesh() {
+  if (!sceneStarted || !gpu.far || !gpu.farPos) return;
+  const geo = gpu.far.geometry;
+  const pos = new THREE.BufferAttribute(gpu.farPos, 3);
+  const col = new THREE.BufferAttribute(gpu.farCol, 3);
+  const size = new THREE.BufferAttribute(gpu.farSize, 1);
+  pos.setUsage(THREE.DynamicDrawUsage);
+  col.setUsage(THREE.DynamicDrawUsage);
+  size.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute("position", pos);
+  geo.setAttribute("color", col);
+  geo.setAttribute("aSize", size);
+  publishFar();
+  const frame = catalog.frame;
+  if (!frame || !viewCamera || !viewControls) return;
+  viewControls.target.set(frame.targetX, frame.targetY, frame.targetZ);
+  viewCamera.position.set(frame.cameraX, frame.cameraY, frame.cameraZ);
+  viewCamera.lookAt(frame.targetX, frame.targetY, frame.targetZ);
+  viewCamera.updateProjectionMatrix();
+  viewControls.update();
+}
+
 function buildSegmentIndex(seg) {
   const { view } = catalog;
   const { base, count } = seg;
@@ -1343,15 +1372,45 @@ async function loadSingleCatalog(cause) {
   return count;
 }
 
+async function fallbackToCatalog(cause) {
+  clearPreviewState();
+  updateHud();
+  try {
+    await loadSingleCatalog(cause);
+    setStatus(
+      `Building FAR stride + spatial index over <strong>${catalog.count.toLocaleString()}</strong> records…`
+    );
+    await buildFarAndIndex();
+    retargetFarMesh();
+    initScene();
+    updateHud();
+  } catch (err) {
+    clearPreviewState();
+    console.error(err);
+    setStatus(
+      `Could not load <code>data/catalog.bin</code>. ${err.message}<br>` +
+        `Drop a GaiaSource 62-byte LE shard (RA/Dec at +8/+16) or a StarIS xyz catalog as <code>data/catalog.bin</code>.`,
+      true
+    );
+    el.count.textContent = "0 drawn";
+    el.mode.textContent = "LOD error";
+  }
+}
+
 async function main() {
+  let tileErr = null;
   try {
     setStatus("Fetching <code>data/tiles.json</code>…");
     const index = await loadTilesIndex();
     const tiles = Array.isArray(index.tiles) ? index.tiles.slice() : [];
     if (!tiles.length) throw new Error("tiles.json has no tiles");
     await streamTiles(index, tiles);
-  } catch (tileErr) {
-    if (sceneStarted) {
+  } catch (err) {
+    tileErr = err;
+  }
+
+  if (sceneStarted && catalog.count > 0) {
+    if (tileErr) {
       console.warn(tileErr);
       catalog.streamDone = true;
       if (lod.tileFarCount > 0) {
@@ -1360,27 +1419,13 @@ async function main() {
         publishFar();
       }
       updateHud();
-      return;
     }
-    try {
-      await loadSingleCatalog(tileErr);
-      setStatus(
-        `Building FAR stride + spatial index over <strong>${catalog.count.toLocaleString()}</strong> records…`
-      );
-      await buildFarAndIndex();
-      initScene();
-      updateHud();
-    } catch (err) {
-      console.error(err);
-      setStatus(
-        `Could not load <code>data/catalog.bin</code>. ${err.message}<br>` +
-          `Drop a GaiaSource 62-byte LE shard (RA/Dec at +8/+16) or a StarIS xyz catalog as <code>data/catalog.bin</code>.`,
-        true
-      );
-      el.count.textContent = "0 drawn";
-      el.mode.textContent = "LOD error";
-    }
+    return;
   }
+
+  const cause =
+    tileErr || new Error(catalog.tileErrors[0] || "No tile records loaded");
+  await fallbackToCatalog(cause);
 }
 
 function frameDirection(ux, uy, uz, dist = 28) {

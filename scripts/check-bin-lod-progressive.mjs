@@ -3,6 +3,7 @@
  * then fills those tiles into the same page.
  *
  * Usage: node scripts/check-bin-lod-progressive.mjs
+ * Node 20: node --experimental-websocket scripts/check-bin-lod-progressive.mjs
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
