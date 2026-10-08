@@ -93,6 +93,7 @@ const catalog = {
   tileTotal: 0,
   streamDone: false,
   tileErrors: [],
+  fallbackNote: "",
   layoutReady: false,
 };
 
@@ -149,6 +150,17 @@ function countBrightPixels(renderer) {
 function setStatus(html, isError = false) {
   el.status.innerHTML = html;
   el.status.classList.toggle("status-error", isError);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+}
+
+function tileFileName(tile) {
+  const url = String(tile && tile.url ? tile.url : "");
+  const name = url.split("/").pop().split("?")[0];
+  if (name && name.endsWith(".bin")) return name;
+  return `${tile && tile.id ? tile.id : "tile"}.bin`;
 }
 
 function yieldFrame() {
@@ -363,15 +375,22 @@ async function loadTilesIndex() {
   const urls = ["data/tiles.json", "data/tiles/tiles.json"];
   let lastErr = null;
   for (const url of urls) {
+    let res;
     try {
-      const res = await fetch(url, { cache: "no-cache" });
-      if (!res.ok) {
-        lastErr = new Error(`tiles.json ${res.status} at ${url}`);
-        continue;
-      }
+      res = await fetch(url, { cache: "no-cache" });
+    } catch (err) {
+      lastErr = new Error("tiles.json network error");
+      continue;
+    }
+    if (!res.ok) {
+      lastErr = new Error(`tiles.json ${res.status}`);
+      continue;
+    }
+    try {
       return await res.json();
     } catch (err) {
-      lastErr = err;
+      const detail = err && err.message ? err.message : "invalid JSON";
+      throw new Error(`tiles.json parse error: ${detail}`);
     }
   }
   throw lastErr || new Error("tiles.json not found");
@@ -388,11 +407,17 @@ function tileCenterScore(tile, lookUx, lookUy, lookUz) {
 }
 
 async function fetchTileBuffer(tile) {
-  const res = await fetch(tile.url, { cache: "no-cache" });
-  if (!res.ok) throw new Error(`tile ${tile.id} fetch ${res.status}`);
+  const file = tileFileName(tile);
+  let res;
+  try {
+    res = await fetch(tile.url, { cache: "no-cache" });
+  } catch (err) {
+    throw new Error(`${file} network error`);
+  }
+  if (!res.ok) throw new Error(`${file} ${res.status}`);
   const buffer = await res.arrayBuffer();
   if (buffer.byteLength < RECORD_SIZE) {
-    throw new Error(`tile ${tile.id} too small`);
+    throw new Error(`${file} too small`);
   }
   return buffer;
 }
@@ -1192,9 +1217,12 @@ function updateHud() {
     : total > 1
       ? `FAR sample ${lod.farCount.toLocaleString()} from tiles that have arrived`
       : `FAR stride ${catalog.stride} → ${lod.farCount.toLocaleString()} generalized across loaded tiles`;
-  const errNote = catalog.tileErrors.length
-    ? `<br>${catalog.tileErrors.length} tile${catalog.tileErrors.length === 1 ? "" : "s"} failed to load`
-    : "";
+  const errLines = catalog.tileErrors.length
+    ? catalog.tileErrors
+    : catalog.fallbackNote
+      ? [catalog.fallbackNote]
+      : [];
+  const errNote = errLines.length ? `<br>${errLines.map(escapeHtml).join("<br>")}` : "";
   setStatus(
     `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB loaded · ${tileNote} · 62 B LE · ${layoutNote}<br>` +
       `${farLine}<br>` +
@@ -1349,11 +1377,14 @@ async function loadSingleCatalog(cause) {
   console.warn("Multi-tile load failed; falling back to catalog.bin", cause);
   resetStreamBuffers();
   setStatus("Fetching <code>data/catalog.bin</code> as bytes…");
-  const res = await fetch("data/catalog.bin", { cache: "no-cache" });
-  if (!res.ok) {
-    const why = cause && cause.message ? cause.message : "tiles unavailable";
-    throw new Error(`Failed to load tiles.json (${why}) and catalog.bin (${res.status})`);
+  const why = cause && cause.message ? cause.message : "No tile records loaded";
+  let res;
+  try {
+    res = await fetch("data/catalog.bin", { cache: "no-cache" });
+  } catch (err) {
+    throw new Error(`${why}. catalog.bin network error`);
   }
+  if (!res.ok) throw new Error(`${why}. catalog.bin ${res.status}`);
   const buffer = await res.arrayBuffer();
   if (buffer.byteLength < RECORD_SIZE) {
     throw new Error("catalog.bin is too small to hold one 62-byte record");
@@ -1373,6 +1404,10 @@ async function loadSingleCatalog(cause) {
 }
 
 async function fallbackToCatalog(cause) {
+  const listed = catalog.tileErrors.slice();
+  catalog.fallbackNote = listed.length
+    ? listed.join("; ")
+    : (cause && cause.message) || "No tile records loaded";
   clearPreviewState();
   updateHud();
   try {
@@ -1388,7 +1423,7 @@ async function fallbackToCatalog(cause) {
     clearPreviewState();
     console.error(err);
     setStatus(
-      `Could not load <code>data/catalog.bin</code>. ${err.message}<br>` +
+      `Could not load <code>data/catalog.bin</code>. ${escapeHtml(err.message)}<br>` +
         `Drop a GaiaSource 62-byte LE shard (RA/Dec at +8/+16) or a StarIS xyz catalog as <code>data/catalog.bin</code>.`,
       true
     );
