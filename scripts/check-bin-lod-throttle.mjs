@@ -5,6 +5,7 @@
  * download and upload, 0 ms extra latency. No per-tile delays.
  *
  * Usage: node scripts/check-bin-lod-throttle.mjs
+ * Node 20: node --experimental-websocket scripts/check-bin-lod-throttle.mjs
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
