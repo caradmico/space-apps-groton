@@ -98,6 +98,8 @@ const catalog = {
 
 const lod = {
   farCount: 0,
+  tileFarCount: 0,
+  previewFarCount: 0,
   nearCount: 0,
   mode: "far",
   lastTarget: new THREE.Vector3(Infinity, Infinity, Infinity),
@@ -565,13 +567,21 @@ function applyFrameFromStats(stats) {
   setFrame(targetX, targetY, targetZ, frameExtent);
 }
 
+function writeFarPoint(far, view, record, pos, mag) {
+  gpu.farPos[far * 3] = pos.x;
+  gpu.farPos[far * 3 + 1] = pos.y;
+  gpu.farPos[far * 3 + 2] = pos.z;
+  writeAppearance(gpu.farCol, gpu.farSize, far, readColorClass(view, record), mag, 0.55);
+}
+
 function sampleFarRange(base, count, quota, stats) {
   if (count <= 0 || quota <= 0) return;
   const stride = Math.max(1, Math.floor(count / quota));
-  const farCap = Math.min(FAR_BUDGET, lod.farCount + quota);
+  // Tile points overwrite the preview from the front. They do not append past it.
+  const farCap = Math.min(FAR_BUDGET, lod.tileFarCount + quota);
   const { view } = catalog;
   const pos = scratch;
-  let far = lod.farCount;
+  let far = lod.tileFarCount;
 
   for (let i = 0; i < count; i += stride) {
     let pick = -1;
@@ -590,21 +600,65 @@ function sampleFarRange(base, count, quota, stats) {
     if (pick >= 0 && far < farCap) {
       const record = base + pick;
       readStar(view, record, pos);
-      gpu.farPos[far * 3] = pos.x;
-      gpu.farPos[far * 3 + 1] = pos.y;
-      gpu.farPos[far * 3 + 2] = pos.z;
-      writeAppearance(
-        gpu.farCol,
-        gpu.farSize,
-        far,
-        readColorClass(view, record),
-        bestMag,
-        0.55
-      );
+      writeFarPoint(far, view, record, pos, bestMag);
       far += 1;
     }
   }
-  lod.farCount = far;
+  lod.tileFarCount = far;
+  if (lod.tileFarCount >= lod.previewFarCount) lod.previewFarCount = 0;
+  lod.farCount = Math.max(lod.tileFarCount, lod.previewFarCount);
+}
+
+async function showPreview(layoutHint) {
+  try {
+    const res = await fetch("data/preview.bin", { cache: "no-cache" });
+    if (!res.ok) return false;
+    const buffer = await res.arrayBuffer();
+    const count = Math.floor(buffer.byteLength / RECORD_SIZE);
+    if (count < 1) return false;
+    const view = new DataView(buffer);
+    if (!catalog.layoutReady) {
+      // Brightest-star subsets can trip the xyz detector. The tile index is authoritative.
+      catalog.layout = layoutHint === "gaia_radec" ? "radec" : detectLayout(view, count);
+      catalog.layoutReady = true;
+    }
+    const stats = emptyFrameStats();
+    const pos = scratch;
+    const limit = Math.min(count, FAR_BUDGET);
+    let far = 0;
+    for (let i = 0; i < limit; i++) {
+      if (!readStar(view, i, pos)) continue;
+      accumulateFrame(stats, pos);
+      writeFarPoint(far, view, i, pos, readMag(view, i));
+      far += 1;
+    }
+    if (far === 0 || stats.valid === 0) return false;
+    lod.previewFarCount = far;
+    lod.tileFarCount = 0;
+    lod.farCount = far;
+    applyFrameFromStats(stats);
+    if (catalog.frame && catalog.layout === "radec") {
+      const wide = Math.max(catalog.frame.extent, SKY_RADIUS * 0.55);
+      if (wide !== catalog.frame.extent) {
+        setFrame(catalog.frame.targetX, catalog.frame.targetY, catalog.frame.targetZ, wide);
+      }
+    }
+    ensureNearBuffers();
+    initScene();
+    updateHud();
+    trace.paints.push({
+      id: "preview",
+      loaded: catalog.loadedTileCount,
+      far,
+      records: catalog.count,
+      t: performance.now(),
+    });
+    await yieldFrame();
+    return true;
+  } catch (err) {
+    console.warn(err);
+    return false;
+  }
 }
 
 function publishFar() {
@@ -808,14 +862,25 @@ async function streamTiles(index, tiles) {
   ensureNearBuffers();
 
   const quotas = farQuotas(tiles);
-  setStatus(
-    `Fetching <strong>${tiles.length}</strong> LOD tiles. Stars draw as soon as the first one arrives…`
-  );
+  const showedPreview = await showPreview(index.layout);
+  // Chrome's network throttle aborts tile fetches that start in the same
+  // task as the preview frame. A macrotask boundary lets the queue open.
+  if (showedPreview) await new Promise((resolve) => setTimeout(resolve, 0));
+  if (!showedPreview) {
+    setStatus(
+      `Fetching <strong>${tiles.length}</strong> LOD tiles. Stars draw as soon as the first one arrives…`
+    );
+  }
 
   // Two downloads at a time, in look order. A finished tile is ingested
   // immediately and the freed slot starts the next file.
   await downloadTilesInOrder(tiles, quotas);
 
+  if (lod.tileFarCount > 0) {
+    lod.previewFarCount = 0;
+    lod.farCount = lod.tileFarCount;
+    publishFar();
+  }
   catalog.streamDone = true;
   if (!sceneStarted || catalog.count === 0) {
     const detail = catalog.tileErrors[0] || "No finite positions in LOD tiles";
@@ -1089,11 +1154,13 @@ function updateHud() {
   const loaded = catalog.loadedTileCount;
   const tileNote = total > 1 ? `${loaded}/${total} tiles` : catalog.sourceLabel;
   const waiting = total > 1 && loaded < total;
+  const previewing = lod.previewFarCount > lod.tileFarCount && loaded === 0;
   el.mode.textContent = lod.mode === "near" ? "LOD NEAR" : "LOD FAR";
   el.mode.dataset.mode = lod.mode;
   el.count.textContent = `${lod.farCount.toLocaleString()} far · ${lod.nearCount.toLocaleString()} near · ${tileNote}`;
-  const farLine =
-    total > 1
+  const farLine = previewing
+    ? `FAR preview ${lod.farCount.toLocaleString()} stars, not counted in the catalog`
+    : total > 1
       ? `FAR sample ${lod.farCount.toLocaleString()} from tiles that have arrived`
       : `FAR stride ${catalog.stride} → ${lod.farCount.toLocaleString()} generalized across loaded tiles`;
   const errNote = catalog.tileErrors.length
@@ -1102,9 +1169,11 @@ function updateHud() {
   setStatus(
     `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB loaded · ${tileNote} · 62 B LE · ${layoutNote}<br>` +
       `${farLine}<br>` +
-      (waiting
-        ? `Showing stars from the first tiles in. The rest fill in on this same view.`
-        : lod.mode === "near"
+      (previewing
+        ? `Coarse sky preview is on screen. Tile records replace those points as they arrive.`
+        : waiting
+          ? `Showing stars from the first tiles in. The rest fill in on this same view.`
+          : lod.mode === "near"
           ? `NEAR accurate subset ${lod.nearCount.toLocaleString()} (cap ${NEAR_BUDGET.toLocaleString()}) within ${catalog.nearRadius.toFixed(1)} of target`
           : `Zoom in toward a region to load an accurate nearby subset`) +
       errNote +
@@ -1238,7 +1307,10 @@ function resetStreamBuffers() {
   catalog.loadedTileCount = 0;
   catalog.tileTotal = 0;
   catalog.streamDone = false;
+  catalog.layoutReady = false;
   lod.farCount = 0;
+  lod.tileFarCount = 0;
+  lod.previewFarCount = 0;
   gpu.farPos = null;
   gpu.farCol = null;
   gpu.farSize = null;
@@ -1279,9 +1351,14 @@ async function main() {
     if (!tiles.length) throw new Error("tiles.json has no tiles");
     await streamTiles(index, tiles);
   } catch (tileErr) {
-    if (sceneStarted && catalog.count > 0) {
+    if (sceneStarted) {
       console.warn(tileErr);
       catalog.streamDone = true;
+      if (lod.tileFarCount > 0) {
+        lod.previewFarCount = 0;
+        lod.farCount = lod.tileFarCount;
+        publishFar();
+      }
       updateHud();
       return;
     }
@@ -1332,6 +1409,8 @@ window.__BIN_LOD = {
       pointsDrawn: trace.pointsDrawn,
       brightPixels: trace.brightPixels,
       farCount: lod.farCount,
+      tileFarCount: lod.tileFarCount,
+      previewFarCount: lod.previewFarCount,
       nearCount: lod.nearCount,
       records: catalog.count,
       loadedTiles: catalog.loadedTileCount,
