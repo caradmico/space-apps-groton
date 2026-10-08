@@ -170,8 +170,10 @@ async function main() {
   const urls = new Map();
   let totalBytes = 0;
   let tileBytes = 0;
+  let previewBytes = 0;
   const tileBytesByFile = new Map();
   const finishedTiles = new Set();
+  const finishedFiles = new Set();
 
   try {
     await waitJson(`http://127.0.0.1:${CDP_PORT}/json/version`);
@@ -187,16 +189,22 @@ async function main() {
       const url = urls.get(params.requestId) || "";
       const n = params.encodedDataLength || 0;
       totalBytes += n;
+      const name = url.split("/").pop().split("?")[0];
       if (/\/data\/tiles\/tile-.*\.bin(?:\?|$)/.test(url)) {
         tileBytes += n;
-        const name = url.split("/").pop().split("?")[0];
         tileBytesByFile.set(name, (tileBytesByFile.get(name) || 0) + n);
+      } else if (/(?:^|\/)preview\.bin(?:\?|$)/.test(url)) {
+        previewBytes += n;
       }
     });
     cdp.on("Network.loadingFinished", (params) => {
       const url = urls.get(params.requestId) || "";
+      const name = url.split("/").pop().split("?")[0];
       if (/\/data\/tiles\/tile-.*\.bin(?:\?|$)/.test(url)) {
-        finishedTiles.add(url.split("/").pop().split("?")[0]);
+        finishedTiles.add(name);
+        finishedFiles.add(name);
+      } else if (/(?:^|\/)preview\.bin(?:\?|$)/.test(url)) {
+        finishedFiles.add(name);
       }
     });
     await cdp.send("Runtime.enable");
@@ -233,8 +241,11 @@ async function main() {
           records: last.records,
           paint: last.paints[0] || null,
           tileBytes,
+          previewBytes,
           totalBytes,
+          recordsAtFirst: last.records,
           finishedTiles: [...finishedTiles],
+          finishedFiles: [...finishedFiles],
           tileBytesByFile: Object.fromEntries(tileBytesByFile),
         };
         break;
@@ -265,11 +276,13 @@ async function main() {
         loadedTiles: full.loadedTiles,
         tileTotal: full.tileTotal,
         records: full.records,
+        previewFarCount: full.previewFarCount,
         farCount: full.farCount,
         paints: full.paints.map((paint) => paint.id),
         errors: full.errors,
         wallMs: Date.now() - navAt,
         tileBytes,
+        previewBytes,
         totalBytes,
       },
     };
