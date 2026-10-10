@@ -1,0 +1,212 @@
+{
+  "version": 2,
+  "scheme": "healpix_nested_exclusive",
+  "cap": 1024,
+  "record": {
+    "format": "q8",
+    "bytes": 8
+  },
+  "total_records": 207937,
+  "hosts": {
+    "pages": "",
+    "r2": null
+  },
+  "levels": [
+    {
+      "order": 0,
+      "host": "pages",
+      "pack": "o0_p0.pack",
+      "pack_parent_order": -1,
+      "pack_id": 0,
+      "n": 8192,
+      "bytes": 65644
+    },
+    {
+      "order": 1,
+      "host": "pages",
+      "pack": "o1_p0.pack",
+      "pack_parent_order": -1,
+      "pack_id": 0,
+      "n": 8192,
+      "bytes": 65644
+    },
+    {
+      "order": 2,
+      "host": "pages",
+      "pack": "o2_p0.pack",
+      "pack_parent_order": -1,
+      "pack_id": 0,
+      "n": 10240,
+      "bytes": 82052
+    },
+    {
+      "order": 3,
+      "host": "pages",
+      "pack": "o3_p0.pack",
+      "pack_parent_order": -1,
+      "pack_id": 0,
+      "n": 11740,
+      "bytes": 94076
+    },
+    {
+      "order": 4,
+      "host": "pages",
+      "pack": "o4_p0.pack",
+      "pack_parent_order": -1,
+      "pack_id": 0,
+      "n": 15387,
+      "bytes": 123300
+    },
+    {
+      "order": 5,
+      "host": "pages",
+      "pack": "o5_p0.pack",
+      "pack_parent_order": 0,
+      "pack_id": 0,
+      "n": 7168,
+      "bytes": 57440
+    },
+    {
+      "order": 5,
+      "host": "pages",
+      "pack": "o5_p3.pack",
+      "pack_parent_order": 0,
+      "pack_id": 3,
+      "n": 3072,
+      "bytes": 24624
+    },
+    {
+      "order": 5,
+      "host": "pages",
+      "pack": "o5_p4.pack",
+      "pack_parent_order": 0,
+      "pack_id": 4,
+      "n": 19456,
+      "bytes": 155888
+    },
+    {
+      "order": 5,
+      "host": "pages",
+      "pack": "o5_p7.pack",
+      "pack_parent_order": 0,
+      "pack_id": 7,
+      "n": 2048,
+      "bytes": 16420
+    },
+    {
+      "order": 5,
+      "host": "pages",
+      "pack": "o5_p8.pack",
+      "pack_parent_order": 0,
+      "pack_id": 8,
+      "n": 1024,
+      "bytes": 8216
+    },
+    {
+      "order": 5,
+      "host": "pages",
+      "pack": "o5_p9.pack",
+      "pack_parent_order": 0,
+      "pack_id": 9,
+      "n": 2048,
+      "bytes": 16420
+    },
+    {
+      "order": 5,
+      "host": "pages",
+      "pack": "o5_p10.pack",
+      "pack_parent_order": 0,
+      "pack_id": 10,
+      "n": 1024,
+      "bytes": 8216
+    },
+    {
+      "order": 5,
+      "host": "pages",
+      "pack": "o5_p11.pack",
+      "pack_parent_order": 0,
+      "pack_id": 11,
+      "n": 5120,
+      "bytes": 41032
+    },
+    {
+      "order": 6,
+      "host": "pages",
+      "pack": "o6_p2.pack",
+      "pack_parent_order": 1,
+      "pack_id": 2,
+      "n": 27516,
+      "bytes": 220464
+    },
+    {
+      "order": 6,
+      "host": "pages",
+      "pack": "o6_p13.pack",
+      "pack_parent_order": 1,
+      "pack_id": 13,
+      "n": 9216,
+      "bytes": 73848
+    },
+    {
+      "order": 6,
+      "host": "pages",
+      "pack": "o6_p19.pack",
+      "pack_parent_order": 1,
+      "pack_id": 19,
+      "n": 41622,
+      "bytes": 333888
+    },
+    {
+      "order": 6,
+      "host": "pages",
+      "pack": "o6_p28.pack",
+      "pack_parent_order": 1,
+      "pack_id": 28,
+      "n": 6144,
+      "bytes": 49236
+    },
+    {
+      "order": 6,
+      "host": "pages",
+      "pack": "o6_p32.pack",
+      "pack_parent_order": 1,
+      "pack_id": 32,
+      "n": 2048,
+      "bytes": 16420
+    },
+    {
+      "order": 6,
+      "host": "pages",
+      "pack": "o6_p38.pack",
+      "pack_parent_order": 1,
+      "pack_id": 38,
+      "n": 5120,
+      "bytes": 41032
+    },
+    {
+      "order": 6,
+      "host": "pages",
+      "pack": "o6_p41.pack",
+      "pack_parent_order": 1,
+      "pack_id": 41,
+      "n": 2048,
+      "bytes": 16420
+    },
+    {
+      "order": 6,
+      "host": "pages",
+      "pack": "o6_p47.pack",
+      "pack_parent_order": 1,
+      "pack_id": 47,
+      "n": 19512,
+      "bytes": 156348
+    }
+  ],
+  "hyg": "hyg-v1.bin",
+  "legacy": "data/tiles.json",
+  "deep_unwritten": 431467,
+  "hyg_bytes": 106844,
+  "hyg_names": 207,
+  "hyg_version": "v1",
+  "hyg_credit": "HYG database by astronexus (David Nash), CC BY-SA 4.0"
+}
