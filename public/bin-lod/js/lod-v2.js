@@ -535,8 +535,10 @@ function noteFailure(url, err) {
   const rec = state.retries.get(url) || { n: 0, until: 0, logged: false };
   rec.n += 1;
   state.errorCount += 1;
+  // Doubling from 200 ms schedules 200, 400, then 800 ms. The fourth failure
+  // stops the pack, so the next step (1.6 s) is never waited and there is no 8 s cap.
   if (rec.n >= RETRY_CAP) rec.until = Infinity;
-  else rec.until = performance.now() + Math.min(8000, 200 * 2 ** (rec.n - 1));
+  else rec.until = performance.now() + 200 * 2 ** (rec.n - 1);
   if (!rec.logged) {
     console.warn("v2 near pack failed; backing off", url, err && err.message ? err.message : err);
     rec.logged = true;
@@ -949,6 +951,7 @@ function focusCell(order, cell) {
 function showCredits() {
   const footer = document.querySelector(".footer");
   if (!footer) return;
+  footer.classList.add("footer-v2");
   const linked = HYG_CREDIT.replace(
     "astronexus (David Nash)",
     `<a href="${HYG_URL}">astronexus (David Nash)</a>`
