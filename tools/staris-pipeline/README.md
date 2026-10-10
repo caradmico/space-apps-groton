@@ -41,7 +41,7 @@ They live under a Drive folder named `StarIS`, in `BinFiles_2025` (4,433 files) 
 
 ## Run the 20-shard pilot in Colab
 
-1. Open `https://colab.research.google.com/github/caradmico/space-apps-groton/blob/cursor/staris-pyramid-d6a4/tools/staris-pipeline/gaia_lod_pyramid.ipynb` (the repo is public; this link works before the PR is merged).
+1. Open `https://colab.research.google.com/github/caradmico/space-apps-groton/blob/main/tools/staris-pipeline/gaia_lod_pyramid.ipynb`.
 2. Runtime → Run all. The first cell clones this branch. Allow the Google Drive mount and pick the account that holds `StarIS`.
 3. Leave `MODE = "PILOT"`, `ADAPTER = "drive_bin_dr1"`, and `WRITE_DEEP = False`. The pilot list is the 20 `GaiaSource_000-….bin` names in the notebook (267.9 MB, 4,321,186 records).
 4. If the folder search does not find `StarIS`, set `STARIS` in that cell to the Drive path, for example `/content/drive/MyDrive/StarIS`.
