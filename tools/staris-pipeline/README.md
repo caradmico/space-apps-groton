@@ -4,6 +4,10 @@ Builds the StarIS v2 HEALPix packs from Cara's Gaia DR1 shards on Drive. Plain N
 
 `gaia_lod_pyramid.ipynb` calls `pyramid.py`. Order-k nested cell = `source_id >> (59 - 2k)`. The Q8 encoder is `public/bin-lod/scripts/q8.py`.
 
+The output folder's `tiles.json` is version 2, the index the viewer reads (`?lod=v2`). Pack paths in that file are `packs/<name>`, relative to `tiles.json`. `manifest.json` stays the resume checkpoint and still stores the bare pack filename.
+
+This work has made use of data from the European Space Agency (ESA) mission Gaia (https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis Consortium (DPAC, https://www.cosmos.esa.int/web/gaia/dpac/consortium).
+
 ## What it does
 
 1. **Probe.** For each shard: size, `size % 62`, first and last `source_id`, base cells touched.
@@ -42,7 +46,7 @@ They live under a Drive folder named `StarIS`, in `BinFiles_2025` (4,433 files) 
 3. Leave `MODE = "PILOT"`, `ADAPTER = "drive_bin_dr1"`, and `WRITE_DEEP = False`. The pilot list is the 20 `GaiaSource_000-….bin` names in the notebook (267.9 MB, 4,321,186 records).
 4. If the folder search does not find `StarIS`, set `STARIS` in that cell to the Drive path, for example `/content/drive/MyDrive/StarIS`.
 5. Output goes to a new folder `/content/drive/MyDrive/StarIS_lod_v2`. It does not write into `BinFiles_2025`.
-6. Wait until the last cell prints `pass done` and the verify counts match. If a cell raises `RssExceeded`, RSS went over 2 GB: the checkpoint is `manifest.json` in that folder. Re-run the notebook later and it resumes.
+6. Wait until the last cell prints `pass done` and the verify counts match. The same folder then has `tiles.json` for the v2 viewer. If a cell raises `RssExceeded`, RSS went over 2 GB: the checkpoint is `manifest.json` in that folder. Re-run the notebook later and it resumes.
 7. For the full survey, set `MODE = "FULL"` in a copy of the output folder (or delete the pilot output first). `FULL` reads every `GaiaSource_*.bin` under `BinFiles_2025` and `BinFiles_2025_Continued`.
 
 Local check, no Drive: `python3 tools/staris-pipeline/test_pyramid.py`.

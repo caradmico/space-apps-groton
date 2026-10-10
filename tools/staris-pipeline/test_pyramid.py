@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local check of the pyramid on two public tiles. No Drive, no DR3 download."""
 
+import json
 import os
 import shutil
 import sys
@@ -39,7 +40,23 @@ def main():
         total_in = sum(shard["n"] for shard in manifest["shards"])
         deep = sum(manifest["deep_counts"].values())
         assert report["pass1_coarse"] + deep == total_in
-        print("pipeline", report, "deep", deep, "in", total_in)
+        with open(os.path.join(out, "tiles.json"), "r", encoding="utf-8") as handle:
+            tiles = json.load(handle)
+        assert tiles["version"] == 2
+        assert tiles["scheme"] == "healpix_nested_exclusive"
+        assert tiles["record"] == {"format": "q8", "bytes": 8}
+        assert tiles["total_records"] == report["pack_records"]
+        assert tiles["levels"]
+        saw_root = False
+        for level in tiles["levels"]:
+            assert level["pack"].startswith("packs/")
+            assert os.path.isfile(os.path.join(out, level["pack"]))
+            if level["order"] == 0:
+                saw_root = True
+                assert level["pack_parent_order"] == -1
+        assert saw_root
+        assert all("/" not in level["pack"] for level in manifest["levels"])
+        print("pipeline", report, "deep", deep, "in", total_in, "tiles", len(tiles["levels"]))
     finally:
         shutil.rmtree(out, ignore_errors=True)
 

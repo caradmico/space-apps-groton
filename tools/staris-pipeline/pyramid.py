@@ -831,6 +831,47 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress):
         and np.array_equal(hcount, state["hash_count"])
     )
     save_manifest(output_dir, manifest)
+    write_viewer_tiles(output_dir, levels, total_records)
+
+
+def write_viewer_tiles(output_dir, levels, total_records):
+    """Write tiles.json in the shape the v2 viewer reads.
+
+    Pack paths are relative to this file (`packs/<name>`). The manifest keeps
+    the bare filename so verify can still open `packs/` + that name.
+    """
+    viewer_levels = []
+    for level in levels:
+        parent = int(level["pack_parent_order"])
+        viewer_levels.append(
+            {
+                "order": int(level["order"]),
+                "host": level.get("host", "pages"),
+                "pack": f"packs/{level['pack']}",
+                "pack_parent_order": -1 if parent == 255 else parent,
+                "pack_id": int(level["pack_id"]),
+                "n": int(level["n"]),
+                "bytes": int(level["bytes"]),
+            }
+        )
+    doc = {
+        "version": 2,
+        "scheme": "healpix_nested_exclusive",
+        "cap": CAP,
+        "record": {"format": "q8", "bytes": 8},
+        "total_records": int(total_records),
+        "hosts": {"pages": "", "r2": None},
+        "levels": viewer_levels,
+        "hyg": None,
+        "legacy": "data/tiles.json",
+    }
+    path = os.path.join(output_dir, "tiles.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(doc, handle, indent=2)
+        handle.write("\n")
+    os.replace(tmp, path)
+    return path
 
 
 def verify(output_dir, state, q8):
@@ -878,6 +919,7 @@ def verify(output_dir, state, q8):
             raise ValueError("decoded sample exceeds the Q8 angular limits")
         if float(mag_err.max()) > q8.MAG_ERR + 1e-9:
             raise ValueError("decoded sample exceeds the Q8 mag limit")
+    write_viewer_tiles(output_dir, manifest.get("levels") or [], manifest.get("total_records") or pack_records)
     return {
         "pass1_coarse": coarse,
         "pass2_coarse": written_coarse,
