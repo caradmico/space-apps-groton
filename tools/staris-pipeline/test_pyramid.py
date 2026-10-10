@@ -59,8 +59,10 @@ def main():
         assert report["bytes_over_62"] == byte_records == total_in
         assert report["identity_ok"] is True
         assert report["bytes_over_62"] == report["pass2_coarse"] + deep
-        with open(os.path.join(out, "tiles.json"), "r", encoding="utf-8") as handle:
+        tiles_path = os.path.join(out, "packs", "tiles.json")
+        with open(tiles_path, "r", encoding="utf-8") as handle:
             tiles = json.load(handle)
+        assert not os.path.exists(os.path.join(out, "tiles.json"))
         assert tiles["version"] == 2
         assert tiles["scheme"] == "healpix_nested_exclusive"
         assert tiles["record"] == {"format": "q8", "bytes": 8}
@@ -68,10 +70,12 @@ def main():
         assert tiles["levels"]
         saw_root = False
         for level in tiles["levels"]:
-            assert level["pack"].startswith("packs/")
-            assert os.path.isfile(os.path.join(out, level["pack"]))
+            assert "/" not in level["pack"]
+            assert level["pack"].endswith(".pack")
+            assert os.path.isfile(os.path.join(out, "packs", level["pack"]))
             if level["order"] == 0:
                 saw_root = True
+                assert level["pack"] == "o0_p0.pack"
                 assert level["pack_parent_order"] == -1
         assert saw_root
         assert all("/" not in level["pack"] for level in manifest["levels"])

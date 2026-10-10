@@ -835,10 +835,11 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress):
 
 
 def write_viewer_tiles(output_dir, levels, total_records):
-    """Write tiles.json in the shape the v2 viewer reads.
+    """Write packs/tiles.json in the shape the v2 viewer reads.
 
-    Pack paths are relative to this file (`packs/<name>`). The manifest keeps
-    the bare filename so verify can still open `packs/` + that name.
+    Pack names are bare filenames (`o0_p0.pack`) so the viewer fetches them
+    next to this file. Upload the packs/ folder unchanged as data/v2-pilot.
+    The manifest stays at the output root and still stores the bare filename.
     """
     viewer_levels = []
     for level in levels:
@@ -847,7 +848,7 @@ def write_viewer_tiles(output_dir, levels, total_records):
             {
                 "order": int(level["order"]),
                 "host": level.get("host", "pages"),
-                "pack": f"packs/{level['pack']}",
+                "pack": os.path.basename(level["pack"]),
                 "pack_parent_order": -1 if parent == 255 else parent,
                 "pack_id": int(level["pack_id"]),
                 "n": int(level["n"]),
@@ -865,12 +866,17 @@ def write_viewer_tiles(output_dir, levels, total_records):
         "hyg": None,
         "legacy": "data/tiles.json",
     }
-    path = os.path.join(output_dir, "tiles.json")
+    pack_dir = os.path.join(output_dir, "packs")
+    os.makedirs(pack_dir, exist_ok=True)
+    path = os.path.join(pack_dir, "tiles.json")
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(doc, handle, indent=2)
         handle.write("\n")
     os.replace(tmp, path)
+    stale = os.path.join(output_dir, "tiles.json")
+    if os.path.isfile(stale):
+        os.remove(stale)
     return path
 
 
