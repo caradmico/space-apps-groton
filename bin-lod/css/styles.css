@@ -148,6 +148,14 @@ canvas {
   text-align: center;
 }
 
+.footer.footer-v2 {
+  line-height: 1.45;
+}
+
+.footer.footer-v2 a {
+  color: inherit;
+}
+
 .footer code {
   color: var(--accent);
 }

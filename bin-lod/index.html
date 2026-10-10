@@ -40,6 +40,18 @@
       (RA/Dec → sky sphere; tiles.json + data/tiles/*.bin).
     </footer>
 
-    <script type="module" src="js/lod-app.js"></script>
+    <script>
+      if (/[?&]lod=v2(?:&|$)/.test(location.search)) {
+        window.__V2_PREFETCH__ = { order0: fetch("data/v2-pilot/o0_p0.pack") };
+      }
+    </script>
+    <script type="module">
+      if (/[?&]lod=v2(?:&|$)/.test(location.search)) {
+        const mod = await import("./js/lod-v2.js");
+        await mod.startV2();
+      } else {
+        await import("./js/lod-app.js");
+      }
+    </script>
   </body>
 </html>

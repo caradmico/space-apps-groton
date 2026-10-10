@@ -41,7 +41,26 @@ Dec uses `2^24 − 1` codes so −90° and +90° are exact. RA uses `2^24` codes
 
 Round-trip check, one ≤ 1 MB slice from each of the 9 tiles: `python3 public/bin-lod/scripts/test_q8.py`.
 
+## v2 pilot (`?lod=v2`)
+
+`data/v2-pilot/tiles.json` is its own index (version 2). Pack paths inside it are relative to that file. `data/tiles.json` stays where it is. With no `lod` flag the page still loads the v1 tiles, preview, and queue.
+
+Order 0 is the resident far layer (cap 12,288) and replaces the preview in this mode. Near keeps at most 12 HEALPix cells (cap 12,288), picked by projected size, ancestors first, refined past about 256 px. Two pack fetches at a time. Contiguous cells share one Range GET. The decoded cache evicts the farthest cells past 128. A `206` body is only the requested byte range: the header is parsed from the header bytes, and a cell already inside a loaded range is not fetched again.
+
+`data/v2-pilot/hyg-v1.bin` is HYG v1, the 8,000-star catalog: float32 xyz, one magnitude byte, and 207 names (about 104 KB plus the name table). It fades in near the Sun and in NEAR mode. Matched Gaia points are hidden while it is visible. Names are drawn only while that layer is visible.
+
+Rebuild from the nine tiles (does not touch the v1 files). Download the HYG catalog yourself and pass that path (the script does not fetch it):
+
+```bash
+curl -L -o stars.json https://staris-b01f2.firebaseapp.com/data/stars.json
+python3 public/bin-lod/scripts/build-v2-pilot.py stars.json
+```
+
+HYG database by [astronexus (David Nash)](https://github.com/astronexus/HYG-Database), CC BY-SA 4.0. Share-alike: adaptations of the HYG catalog stay under CC BY-SA 4.0.
+
+This work has made use of data from the European Space Agency (ESA) mission Gaia (https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis Consortium (DPAC, https://www.cosmos.esa.int/web/gaia/dpac/consortium).
+
 ## Build note
 Raw Drive shards stay off Pages. Only LOD tiles are published.
 
-Headless checks use a global `WebSocket`. On Node 20, pass `--experimental-websocket` (`node --experimental-websocket scripts/check-bin-lod-progressive.mjs`, and the same flag for `scripts/check-bin-lod-throttle.mjs`, `scripts/check-bin-lod-fallback.mjs`, and `scripts/check-bin-lod-errors.mjs`).
+Headless checks use a global `WebSocket`. On Node 20, pass `--experimental-websocket` (`node --experimental-websocket scripts/check-bin-lod-progressive.mjs`, and the same flag for `scripts/check-bin-lod-throttle.mjs`, `scripts/check-bin-lod-fallback.mjs`, `scripts/check-bin-lod-errors.mjs`, `scripts/check-bin-lod-v2.mjs`, and `scripts/check-bin-lod-v2-range.mjs`).
