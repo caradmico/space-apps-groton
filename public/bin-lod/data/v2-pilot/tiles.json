@@ -15,7 +15,7 @@
     {
       "order": 0,
       "host": "pages",
-      "pack": "data/v2-pilot/o0_p0.pack",
+      "pack": "o0_p0.pack",
       "pack_parent_order": -1,
       "pack_id": 0,
       "n": 8192,
@@ -24,7 +24,7 @@
     {
       "order": 1,
       "host": "pages",
-      "pack": "data/v2-pilot/o1_p0.pack",
+      "pack": "o1_p0.pack",
       "pack_parent_order": -1,
       "pack_id": 0,
       "n": 8192,
@@ -33,7 +33,7 @@
     {
       "order": 2,
       "host": "pages",
-      "pack": "data/v2-pilot/o2_p0.pack",
+      "pack": "o2_p0.pack",
       "pack_parent_order": -1,
       "pack_id": 0,
       "n": 10240,
@@ -42,7 +42,7 @@
     {
       "order": 3,
       "host": "pages",
-      "pack": "data/v2-pilot/o3_p0.pack",
+      "pack": "o3_p0.pack",
       "pack_parent_order": -1,
       "pack_id": 0,
       "n": 11740,
@@ -51,7 +51,7 @@
     {
       "order": 4,
       "host": "pages",
-      "pack": "data/v2-pilot/o4_p0.pack",
+      "pack": "o4_p0.pack",
       "pack_parent_order": -1,
       "pack_id": 0,
       "n": 15387,
@@ -60,7 +60,7 @@
     {
       "order": 5,
       "host": "pages",
-      "pack": "data/v2-pilot/o5_p0.pack",
+      "pack": "o5_p0.pack",
       "pack_parent_order": 0,
       "pack_id": 0,
       "n": 7168,
@@ -69,7 +69,7 @@
     {
       "order": 5,
       "host": "pages",
-      "pack": "data/v2-pilot/o5_p3.pack",
+      "pack": "o5_p3.pack",
       "pack_parent_order": 0,
       "pack_id": 3,
       "n": 3072,
@@ -78,7 +78,7 @@
     {
       "order": 5,
       "host": "pages",
-      "pack": "data/v2-pilot/o5_p4.pack",
+      "pack": "o5_p4.pack",
       "pack_parent_order": 0,
       "pack_id": 4,
       "n": 19456,
@@ -87,7 +87,7 @@
     {
       "order": 5,
       "host": "pages",
-      "pack": "data/v2-pilot/o5_p7.pack",
+      "pack": "o5_p7.pack",
       "pack_parent_order": 0,
       "pack_id": 7,
       "n": 2048,
@@ -96,7 +96,7 @@
     {
       "order": 5,
       "host": "pages",
-      "pack": "data/v2-pilot/o5_p8.pack",
+      "pack": "o5_p8.pack",
       "pack_parent_order": 0,
       "pack_id": 8,
       "n": 1024,
@@ -105,7 +105,7 @@
     {
       "order": 5,
       "host": "pages",
-      "pack": "data/v2-pilot/o5_p9.pack",
+      "pack": "o5_p9.pack",
       "pack_parent_order": 0,
       "pack_id": 9,
       "n": 2048,
@@ -114,7 +114,7 @@
     {
       "order": 5,
       "host": "pages",
-      "pack": "data/v2-pilot/o5_p10.pack",
+      "pack": "o5_p10.pack",
       "pack_parent_order": 0,
       "pack_id": 10,
       "n": 1024,
@@ -123,7 +123,7 @@
     {
       "order": 5,
       "host": "pages",
-      "pack": "data/v2-pilot/o5_p11.pack",
+      "pack": "o5_p11.pack",
       "pack_parent_order": 0,
       "pack_id": 11,
       "n": 5120,
@@ -132,7 +132,7 @@
     {
       "order": 6,
       "host": "pages",
-      "pack": "data/v2-pilot/o6_p2.pack",
+      "pack": "o6_p2.pack",
       "pack_parent_order": 1,
       "pack_id": 2,
       "n": 27516,
@@ -141,7 +141,7 @@
     {
       "order": 6,
       "host": "pages",
-      "pack": "data/v2-pilot/o6_p13.pack",
+      "pack": "o6_p13.pack",
       "pack_parent_order": 1,
       "pack_id": 13,
       "n": 9216,
@@ -150,7 +150,7 @@
     {
       "order": 6,
       "host": "pages",
-      "pack": "data/v2-pilot/o6_p19.pack",
+      "pack": "o6_p19.pack",
       "pack_parent_order": 1,
       "pack_id": 19,
       "n": 41622,
@@ -159,7 +159,7 @@
     {
       "order": 6,
       "host": "pages",
-      "pack": "data/v2-pilot/o6_p28.pack",
+      "pack": "o6_p28.pack",
       "pack_parent_order": 1,
       "pack_id": 28,
       "n": 6144,
@@ -168,7 +168,7 @@
     {
       "order": 6,
       "host": "pages",
-      "pack": "data/v2-pilot/o6_p32.pack",
+      "pack": "o6_p32.pack",
       "pack_parent_order": 1,
       "pack_id": 32,
       "n": 2048,
@@ -177,7 +177,7 @@
     {
       "order": 6,
       "host": "pages",
-      "pack": "data/v2-pilot/o6_p38.pack",
+      "pack": "o6_p38.pack",
       "pack_parent_order": 1,
       "pack_id": 38,
       "n": 5120,
@@ -186,7 +186,7 @@
     {
       "order": 6,
       "host": "pages",
-      "pack": "data/v2-pilot/o6_p41.pack",
+      "pack": "o6_p41.pack",
       "pack_parent_order": 1,
       "pack_id": 41,
       "n": 2048,
@@ -195,16 +195,18 @@
     {
       "order": 6,
       "host": "pages",
-      "pack": "data/v2-pilot/o6_p47.pack",
+      "pack": "o6_p47.pack",
       "pack_parent_order": 1,
       "pack_id": 47,
       "n": 19512,
       "bytes": 156348
     }
   ],
-  "hyg": "data/v2-pilot/hyg-v1.bin",
+  "hyg": "hyg-v1.bin",
   "legacy": "data/tiles.json",
   "deep_unwritten": 431467,
   "hyg_bytes": 106844,
-  "hyg_names": 207
+  "hyg_names": 207,
+  "hyg_version": "v1",
+  "hyg_credit": "HYG database by astronexus (David Nash), CC BY-SA 4.0"
 }

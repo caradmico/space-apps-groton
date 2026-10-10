@@ -21,6 +21,12 @@ const COALESCE_BYTES = 64 * 1024;
 const INDEX_URL = "data/v2-pilot/tiles.json";
 const HYG_MAG0 = -27;
 const HYG_STEP = 0.2;
+const HEADER_RANGE = 64 * 1024;
+const RETRY_CAP = 4;
+const HYG_URL = "https://github.com/astronexus/HYG-Database";
+const HYG_CREDIT = "HYG database by astronexus (David Nash), CC BY-SA 4.0";
+const ESA_CREDIT =
+  "This work has made use of data from the European Space Agency (ESA) mission Gaia (https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis Consortium (DPAC, https://www.cosmos.esa.int/web/gaia/dpac/consortium).";
 
 const el = {
   mode: document.getElementById("lod-mode"),
@@ -48,6 +54,10 @@ const state = {
   labels: [],
   hiddenGaia: 0,
   dedupeProbe: null,
+  indexUrl: INDEX_URL,
+  retries: new Map(),
+  absent: new Set(),
+  errorCount: 0,
 };
 
 let active = 0;
@@ -115,13 +125,79 @@ async function readBuffer(res, label) {
   return res.arrayBuffer();
 }
 
-function parsePack(buffer) {
-  const view = new DataView(buffer);
+function resourceUrl(relative) {
+  if (!relative) return "";
+  if (/^https?:\/\//i.test(relative)) return relative;
+  return new URL(relative, new URL(state.indexUrl, location.href)).href;
+}
+
+function contentRangeOf(res) {
+  const raw = res.headers.get("content-range");
+  if (!raw) return null;
+  const match = /bytes\s+(\d+)-(\d+)\/(\d+|\*)/i.exec(raw);
+  if (!match) return null;
+  return {
+    start: Number(match[1]),
+    end: Number(match[2]),
+    total: match[3] === "*" ? null : Number(match[3]),
+  };
+}
+
+function addSpan(held, start, bytes) {
+  held.spans.push({ start, bytes });
+}
+
+function readBytes(held, start, length) {
+  if (length <= 0) return new Uint8Array(0);
+  for (const span of held.spans) {
+    const spanEnd = span.start + span.bytes.length;
+    if (span.start <= start && spanEnd >= start + length) {
+      const off = start - span.start;
+      return span.bytes.subarray(off, off + length);
+    }
+  }
+  const out = new Uint8Array(length);
+  const got = new Uint8Array(length);
+  let any = false;
+  for (const span of held.spans) {
+    const spanEnd = span.start + span.bytes.length;
+    const lo = Math.max(start, span.start);
+    const hi = Math.min(start + length, spanEnd);
+    if (hi <= lo) continue;
+    out.set(span.bytes.subarray(lo - span.start, hi - span.start), lo - start);
+    got.fill(1, lo - start, hi - start);
+    any = true;
+  }
+  if (!any) return null;
+  for (let i = 0; i < length; i++) if (!got[i]) return null;
+  return out;
+}
+
+function prefixLength(held) {
+  let end = 0;
+  const spans = held.spans.slice().sort((a, b) => a.start - b.start);
+  for (const span of spans) {
+    if (span.start > end) break;
+    end = Math.max(end, span.start + span.bytes.length);
+  }
+  return end;
+}
+
+function parseHeaderBytes(bytes) {
+  if (bytes.byteLength < 12) {
+    return { incomplete: true, recordsAt: 12, cells: [], order: 0, parent: 255, nCells: 0 };
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const magic = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
   if (magic !== "Q8PK") throw new Error("pack magic");
   const order = view.getUint8(4);
   const parent = view.getUint8(5);
   const nCells = view.getUint32(8, true);
+  const recordsAt = 12 + nCells * 12;
+  if (recordsAt < 12 || recordsAt > 2_000_000) throw new Error("pack header size");
+  if (bytes.byteLength < recordsAt) {
+    return { incomplete: true, recordsAt, cells: [], order, parent, nCells };
+  }
   const cells = [];
   let offset = 12;
   for (let i = 0; i < nCells; i++) {
@@ -132,7 +208,35 @@ function parsePack(buffer) {
     });
     offset += 12;
   }
-  return { order, parent, cells, recordsAt: offset, buffer, view };
+  return { incomplete: false, recordsAt, cells, order, parent, nCells };
+}
+
+function storeBody(held, res, requestedStart, body) {
+  if (res.status === 200) {
+    held.spans = [{ start: 0, bytes: body }];
+    held.whole = true;
+    held.fileSize = body.length;
+    return;
+  }
+  if (res.status !== 206) throw new Error(`${held.url} ${res.status}`);
+  // A 206 body is only this range. Never store it as the whole pack.
+  const info = contentRangeOf(res);
+  const start = info ? info.start : requestedStart;
+  addSpan(held, start, body);
+  held.whole = false;
+  if (info && info.total != null) held.fileSize = info.total;
+}
+
+function headerFromHeld(held) {
+  const probe = readBytes(held, 0, Math.min(12, prefixLength(held)));
+  if (!probe || probe.length < 12) throw new Error(`${held.url} header short`);
+  const partial = parseHeaderBytes(probe.length >= 12 ? readBytes(held, 0, prefixLength(held)) || probe : probe);
+  const recordsAt = partial.recordsAt;
+  const header = readBytes(held, 0, recordsAt);
+  if (!header) return partial;
+  const headerBuf = new Uint8Array(recordsAt);
+  headerBuf.set(header.subarray(0, recordsAt), 0);
+  return parseHeaderBytes(headerBuf);
 }
 
 function globalCell(level, local) {
@@ -147,10 +251,14 @@ function levelFor(order, cell) {
   return levels.find((level) => level.pack_id === packId) || null;
 }
 
-function decodeCell(pack, level, local) {
+function decodeCell(held, level, local) {
+  const pack = held.pack;
   const meta = pack.cells.find((cell) => cell.local === local);
   if (!meta || meta.count === 0) return null;
   const cell = globalCell(level, local);
+  const raw = readBytes(held, pack.recordsAt + meta.start * Q8_BYTES, meta.count * Q8_BYTES);
+  if (!raw) return null;
+  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
   const ra = new Float64Array(meta.count);
   const dec = new Float64Array(meta.count);
   const mag = new Float32Array(meta.count);
@@ -158,9 +266,8 @@ function decodeCell(pack, level, local) {
   const pos = new Float32Array(meta.count * 3);
   const col = new Float32Array(meta.count * 3);
   const size = new Float32Array(meta.count);
-  const base = pack.recordsAt + meta.start * Q8_BYTES;
   for (let i = 0; i < meta.count; i++) {
-    const star = decodeQ8(pack.view, base + i * Q8_BYTES);
+    const star = decodeQ8(view, i * Q8_BYTES);
     ra[i] = star.ra;
     dec[i] = star.dec;
     mag[i] = star.mag;
@@ -189,6 +296,7 @@ function decodeCell(pack, level, local) {
     pos,
     col,
     size,
+    raw,
     hide: new Uint8Array(meta.count),
     used: performance.now(),
   };
@@ -242,14 +350,21 @@ function hasFiner(order) {
 }
 
 function selectNear() {
+  if (!state.index) return [];
   const leaves = [];
   const walk = (order, cell) => {
     const px = projectedPx(order, cell);
     if (order < 6 && px > REFINE_PX && hasFiner(order)) {
-      for (const child of children(cell)) walk(order + 1, child);
-      return;
+      const kids = children(cell).filter((child) => {
+        if (state.absent.has(`${order + 1}:${child}`)) return false;
+        return Boolean(levelFor(order + 1, child));
+      });
+      if (kids.length) {
+        for (const child of kids) walk(order + 1, child);
+        return;
+      }
     }
-    if (px > 8) leaves.push({ order, cell, px });
+    if (px > 8 && !state.absent.has(`${order}:${cell}`)) leaves.push({ order, cell, px });
   };
   for (let cell = 0; cell < 12; cell++) walk(0, cell);
   leaves.sort((a, b) => b.px - a.px || a.order - b.order);
@@ -271,7 +386,7 @@ function wantedDownloads(leaves) {
     for (const item of chain) {
       if (item.order === 0) continue;
       const key = `${item.order}:${item.cell}`;
-      if (state.cache.has(key)) continue;
+      if (state.cache.has(key) || state.absent.has(key)) continue;
       const level = levelFor(item.order, item.cell);
       if (!level) continue;
       wanted.push({ ...item, level, key });
@@ -280,19 +395,61 @@ function wantedDownloads(leaves) {
   return wanted;
 }
 
+function holdFull(level, url, bytes) {
+  const pack = parseHeaderBytes(bytes);
+  if (pack.incomplete) throw new Error(`${url} header truncated`);
+  const held = {
+    level,
+    url,
+    spans: [{ start: 0, bytes }],
+    pack,
+    whole: true,
+    fileSize: bytes.length,
+  };
+  state.packs.set(url, held);
+  return held;
+}
+
+const headerLoads = new Map();
+
 async function ensureHeader(level) {
-  if (state.packs.has(level.pack)) return state.packs.get(level.pack);
-  const res = await gatedFetch(level.pack, { headers: { Range: "bytes=0-65535" } });
-  const buffer = await readBuffer(res, level.pack);
-  if (res.status === 200) {
-    const pack = parsePack(buffer);
-    const held = { level, pack, buffer };
-    state.packs.set(level.pack, held);
-    return held;
+  const url = resourceUrl(level.pack);
+  const existing = state.packs.get(url);
+  if (existing && existing.pack && !existing.pack.incomplete) return existing;
+  const inflight = headerLoads.get(url);
+  if (inflight) return inflight;
+  const job = fetchHeader(level, url, existing);
+  headerLoads.set(url, job);
+  try {
+    return await job;
+  } finally {
+    headerLoads.delete(url);
   }
-  const pack = parsePack(buffer);
-  const held = { level, pack, buffer: null, header: buffer };
-  state.packs.set(level.pack, held);
+}
+
+async function fetchHeader(level, url, existing) {
+  const held = existing || { level, url, spans: [], pack: null, whole: false, fileSize: null };
+  held.level = level;
+  held.url = url;
+  if (prefixLength(held) < 12) {
+    const res = await gatedFetch(url, { headers: { Range: `bytes=0-${HEADER_RANGE - 1}` } });
+    const body = new Uint8Array(await readBuffer(res, url));
+    storeBody(held, res, 0, body);
+  }
+  let pack = headerFromHeld(held);
+  if (pack.incomplete) {
+    const have = prefixLength(held);
+    if (have < pack.recordsAt) {
+      const res = await gatedFetch(url, { headers: { Range: `bytes=${have}-${pack.recordsAt - 1}` } });
+      const body = new Uint8Array(await readBuffer(res, url));
+      storeBody(held, res, have, body);
+      if (res.status === 200) pack = parseHeaderBytes(body);
+      else pack = headerFromHeld(held);
+    }
+  }
+  if (!pack || pack.incomplete) throw new Error(`${url} header incomplete`);
+  held.pack = pack;
+  state.packs.set(url, held);
   return held;
 }
 
@@ -300,36 +457,40 @@ async function loadCells(group) {
   const level = group[0].level;
   const held = await ensureHeader(level);
   const byLocal = new Map(held.pack.cells.map((cell) => [cell.local, cell]));
-  const pieces = group
-    .map((item) => {
-      const local = level.order <= 4 ? item.cell : item.cell & 1023;
-      const meta = byLocal.get(local);
-      if (!meta) return null;
-      return { item, local, meta };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.meta.start - b.meta.start);
-  if (!pieces.length) return;
-  let pack = held.pack;
-  if (!held.buffer) {
-    const first = pieces[0].meta;
-    const last = pieces[pieces.length - 1].meta;
-    const start = held.pack.recordsAt + first.start * Q8_BYTES;
-    const end = held.pack.recordsAt + (last.start + last.count) * Q8_BYTES;
-    const res = await gatedFetch(level.pack, { headers: { Range: `bytes=${start}-${end - 1}` } });
-    const slice = new Uint8Array(await readBuffer(res, level.pack));
-    const full = res.status === 200 ? slice : new Uint8Array(end);
-    if (res.status !== 200) {
-      full.set(new Uint8Array(held.header), 0);
-      full.set(slice, start);
+  const pieces = [];
+  for (const item of group) {
+    const local = level.order <= 4 ? item.cell : item.cell & 1023;
+    const meta = byLocal.get(local);
+    if (!meta || meta.count === 0) {
+      state.absent.add(item.key);
+      continue;
     }
-    pack = parsePack(full.buffer);
-    held.pack = pack;
-    held.buffer = full.buffer;
+    pieces.push({ item, local, meta });
+  }
+  pieces.sort((a, b) => a.meta.start - b.meta.start);
+  if (!pieces.length) return;
+  const missing = [];
+  for (const piece of pieces) {
+    const start = held.pack.recordsAt + piece.meta.start * Q8_BYTES;
+    const end = start + piece.meta.count * Q8_BYTES;
+    if (!readBytes(held, start, end - start)) missing.push({ start, end });
+  }
+  if (missing.length) {
+    if (held.whole) throw new Error(`${held.url} missing records`);
+    const start = missing[0].start;
+    const end = missing[missing.length - 1].end;
+    const res = await gatedFetch(held.url, { headers: { Range: `bytes=${start}-${end - 1}` } });
+    const body = new Uint8Array(await readBuffer(res, held.url));
+    storeBody(held, res, start, body);
+    if (res.status === 200) {
+      const parsed = parseHeaderBytes(body);
+      if (!parsed.incomplete) held.pack = parsed;
+    }
   }
   for (const piece of pieces) {
-    const entry = decodeCell(pack, level, piece.local);
-    if (!entry) continue;
+    if (!piece.meta.count) continue;
+    const entry = decodeCell(held, level, piece.local);
+    if (!entry) throw new Error(`${held.url} cell ${piece.local} not in loaded ranges`);
     markHidden(entry);
     touch(entry);
   }
@@ -363,11 +524,33 @@ function coalesce(wanted) {
   return jobs;
 }
 
+function packReady(url) {
+  const rec = state.retries.get(url);
+  if (!rec) return true;
+  if (rec.n >= RETRY_CAP) return false;
+  return performance.now() >= rec.until;
+}
+
+function noteFailure(url, err) {
+  const rec = state.retries.get(url) || { n: 0, until: 0, logged: false };
+  rec.n += 1;
+  state.errorCount += 1;
+  if (rec.n >= RETRY_CAP) rec.until = Infinity;
+  else rec.until = performance.now() + Math.min(8000, 200 * 2 ** (rec.n - 1));
+  if (!rec.logged) {
+    console.warn("v2 near pack failed; backing off", url, err && err.message ? err.message : err);
+    rec.logged = true;
+  }
+  state.retries.set(url, rec);
+}
+
 let loading = false;
 async function pumpNear() {
   if (loading || state.mode !== "near") return;
   const leaves = selectNear();
-  const wanted = wantedDownloads(leaves).slice(0, 24);
+  const wanted = wantedDownloads(leaves)
+    .filter((item) => packReady(resourceUrl(item.level.pack)))
+    .slice(0, 24);
   const jobs = coalesce(wanted).slice(0, MAX_IN_FLIGHT);
   if (!jobs.length) {
     drawNear(leaves);
@@ -375,7 +558,19 @@ async function pumpNear() {
   }
   loading = true;
   try {
-    await Promise.all(jobs.map((group) => loadCells(group)));
+    await Promise.all(
+      jobs.map(async (group) => {
+        const url = resourceUrl(group[0].level.pack);
+        try {
+          await loadCells(group);
+          state.retries.delete(url);
+        } catch (err) {
+          noteFailure(url, err);
+        }
+      })
+    );
+  } catch (err) {
+    noteFailure("near", err);
   } finally {
     loading = false;
   }
@@ -456,12 +651,32 @@ function drawFar() {
   if (n > FAR_BUDGET) state.budgetExceeded = true;
 }
 
-function drawNear(leaves) {
+function resolveNear(leaves) {
   const entries = [];
+  const seen = new Set();
   for (const leaf of leaves || []) {
-    const entry = state.cache.get(`${leaf.order}:${leaf.cell}`);
-    if (entry && entry.order !== 0) entries.push(entry);
+    let order = leaf.order;
+    let cell = leaf.cell;
+    let entry = null;
+    while (order >= 1) {
+      const found = state.cache.get(`${order}:${cell}`);
+      if (found) {
+        entry = found;
+        break;
+      }
+      order -= 1;
+      cell >>= 2;
+    }
+    if (entry && !seen.has(entry.key)) {
+      seen.add(entry.key);
+      entries.push(entry);
+    }
   }
+  return entries;
+}
+
+function drawNear(leaves) {
+  const entries = resolveNear(leaves);
   const n = writeEntries(nearPoints, entries.slice(0, 12), NEAR_BUDGET);
   state.nearCount = state.mode === "near" ? n : 0;
   nearPoints.points.visible = state.mode === "near" && n > 0;
@@ -603,13 +818,22 @@ function gaiaNear(name) {
 }
 
 function drawnNearEntries() {
-  return selectNear()
-    .map((leaf) => state.cache.get(`${leaf.order}:${leaf.cell}`))
-    .filter((entry) => entry && entry.order !== 0);
+  return resolveNear(selectNear());
+}
+
+function hexOf(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, "0");
+  return out;
 }
 
 function updateLabels() {
   if (!hyg || !labelLayer) return;
+  if (state.hygAlpha <= 0.05) {
+    state.labels = [];
+    labelLayer.textContent = "";
+    return;
+  }
   const width = el.canvasWrap.clientWidth;
   const height = el.canvasWrap.clientHeight;
   const visible = [];
@@ -699,6 +923,42 @@ function focus(name) {
   return true;
 }
 
+function aimAt(ux, uy, uz) {
+  controls.target.set(ux * SKY_RADIUS, uy * SKY_RADIUS, uz * SKY_RADIUS);
+  // Close enough for NEAR, far enough that the leaf is an order-4 cell (those packs cover the sky).
+  camera.position.set(ux * (SKY_RADIUS + 12), uy * (SKY_RADIUS + 12), uz * (SKY_RADIUS + 12));
+  camera.near = 0.01;
+  camera.far = 5000;
+  camera.updateProjectionMatrix();
+  return true;
+}
+
+function focusSky() {
+  const entry = order0Entries()[0];
+  if (!entry || !entry.count || !controls) return false;
+  const len = Math.hypot(entry.pos[0], entry.pos[1], entry.pos[2]) || 1;
+  return aimAt(entry.pos[0] / len, entry.pos[1] / len, entry.pos[2] / len);
+}
+
+function focusCell(order, cell) {
+  if (!controls) return false;
+  const vec = pix2vecNest(order, cell);
+  return aimAt(vec[0], vec[1], vec[2]);
+}
+
+function showCredits() {
+  const footer = document.querySelector(".footer");
+  if (!footer) return;
+  const linked = HYG_CREDIT.replace(
+    "astronexus (David Nash)",
+    `<a href="${HYG_URL}">astronexus (David Nash)</a>`
+  );
+  footer.innerHTML =
+    `$0 Spark demo — StarIS v2 HEALPix packs.<br>` +
+    `${linked}. Share-alike: adaptations of the HYG catalog stay under CC BY-SA 4.0.<br>` +
+    ESA_CREDIT;
+}
+
 function paintOrder0Now() {
   const entries = order0Entries();
   let count = 0;
@@ -783,21 +1043,33 @@ export async function startV2() {
         dedupeProbe: state.dedupeProbe,
         hiddenGaia: state.hiddenGaia,
         order0: state.farCount,
+        errorCount: state.errorCount,
+        nearCells: drawnNearEntries().map((entry) => ({
+          order: entry.order,
+          cell: entry.cell,
+          count: entry.count,
+          hex: hexOf(entry.raw),
+        })),
         version: 2,
       };
     },
     focus,
+    focusSky,
+    focusCell,
   };
+  showCredits();
   setStatus("Fetching v2 order 0…");
   const order0Promise = prefetchOrder0();
   const indexPromise = gatedFetch(INDEX_URL);
-  const order0Res = order0Promise ? await order0Promise : await gatedFetch("data/v2-pilot/o0_p0.pack");
-  const order0Buf = await readBuffer(order0Res, "o0_p0.pack");
-  const pack = parsePack(order0Buf);
-  const order0 = { order: 0, pack: "data/v2-pilot/o0_p0.pack", pack_id: 0, pack_parent_order: -1 };
-  state.packs.set(order0.pack, { level: order0, pack, buffer: order0Buf });
-  for (const cell of pack.cells) {
-    const entry = decodeCell(pack, order0, cell.local);
+  const order0Url = resourceUrl("o0_p0.pack");
+  const order0Res = order0Promise ? await order0Promise : await gatedFetch(order0Url);
+  if (order0Res.status !== 200) throw new Error(`o0_p0.pack ${order0Res.status}`);
+  const order0Bytes = new Uint8Array(await readBuffer(order0Res, "o0_p0.pack"));
+  const order0 = { order: 0, pack: "o0_p0.pack", pack_id: 0, pack_parent_order: -1 };
+  const held0 = holdFull(order0, order0Res.url || order0Url, order0Bytes);
+  state.packs.set(order0Url, held0);
+  for (const cell of held0.pack.cells) {
+    const entry = decodeCell(held0, order0, cell.local);
     if (entry) touch(entry);
   }
   paintOrder0Now();
@@ -846,30 +1118,33 @@ export async function startV2() {
   window.addEventListener("resize", resize);
   frame();
 
-  const hygRes = await gatedFetch(state.index.hyg);
-  hyg = parseHyg(await readBuffer(hygRes, state.index.hyg));
-  dedupeProbe();
-  for (const entry of state.cache.values()) markHidden(entry);
-  drawFar();
-  const hygPos = new Float32Array(hyg.n * 3);
-  const hygCol = new Float32Array(hyg.n * 3);
-  for (let i = 0; i < hyg.n; i++) {
-    const star = hyg.stars[i];
-    hygPos[i * 3] = star.x;
-    hygPos[i * 3 + 1] = star.y;
-    hygPos[i * 3 + 2] = star.z;
-    const shade = Math.max(0.35, Math.min(1, (8 - star.mag) / 10));
-    hygCol[i * 3] = shade;
-    hygCol[i * 3 + 1] = shade * 0.95;
-    hygCol[i * 3 + 2] = 1;
+  if (state.index.hyg) {
+    const hygUrl = resourceUrl(state.index.hyg);
+    const hygRes = await gatedFetch(hygUrl);
+    hyg = parseHyg(await readBuffer(hygRes, hygUrl));
+    dedupeProbe();
+    for (const entry of state.cache.values()) markHidden(entry);
+    drawFar();
+    const hygPos = new Float32Array(hyg.n * 3);
+    const hygCol = new Float32Array(hyg.n * 3);
+    for (let i = 0; i < hyg.n; i++) {
+      const star = hyg.stars[i];
+      hygPos[i * 3] = star.x;
+      hygPos[i * 3 + 1] = star.y;
+      hygPos[i * 3 + 2] = star.z;
+      const shade = Math.max(0.35, Math.min(1, (8 - star.mag) / 10));
+      hygCol[i * 3] = shade;
+      hygCol[i * 3 + 1] = shade * 0.95;
+      hygCol[i * 3 + 2] = 1;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(hygPos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(hygCol, 3));
+    hygPoints = new THREE.Points(
+      geo,
+      new THREE.PointsMaterial({ size: 0.15, vertexColors: true, transparent: true, opacity: 0, depthWrite: false })
+    );
+    hygPoints.frustumCulled = false;
+    scene.add(hygPoints);
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(hygPos, 3));
-  geo.setAttribute("color", new THREE.BufferAttribute(hygCol, 3));
-  hygPoints = new THREE.Points(
-    geo,
-    new THREE.PointsMaterial({ size: 0.15, vertexColors: true, transparent: true, opacity: 0, depthWrite: false })
-  );
-  hygPoints.frustumCulled = false;
-  scene.add(hygPoints);
 }

@@ -208,7 +208,7 @@ async function main() {
       if (last && last.firstFrameMs > 0 && last.pointsDrawn > 0 && !first) {
         first = { firstFrameMs: last.firstFrameMs, wallMs: Date.now() - navAt, pointsDrawn: last.pointsDrawn, farCount: last.farCount };
       }
-      if (first && last && last.dedupeProbe && last.labels.includes("Sol")) break;
+      if (first && last && last.dedupeProbe) break;
       await sleep(50);
     }
     if (!first) throw new Error(`no v2 frame: ${JSON.stringify(last)} ${cdp.consoleLines.slice(-6).join(" | ")}`);

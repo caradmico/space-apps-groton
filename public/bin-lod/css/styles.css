@@ -145,7 +145,12 @@ canvas {
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.75rem;
+  line-height: 1.45;
   text-align: center;
+}
+
+.footer a {
+  color: inherit;
 }
 
 .footer code {

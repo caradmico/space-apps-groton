@@ -181,7 +181,7 @@ def build_packs(sid, ra, dec, plx, colour, mag):
             {
                 "order": int(order),
                 "host": "pages",
-                "pack": f"data/v2-pilot/{name}",
+                "pack": name,
                 "pack_parent_order": -1 if parent == 255 else int(parent),
                 "pack_id": int(pack_id),
                 "n": int(nrec),
@@ -230,11 +230,14 @@ def build_hyg(stars):
 def main():
     sid, ra, dec, plx, colour, mag = load_tiles()
     levels, total, deep = build_packs(sid, ra, dec, plx, colour, mag)
-    hyg_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "tmp-stars.json")
-    # The HYG catalog is fetched beside the script output by the caller, or read from /tmp.
-    source = "/tmp/stars.json"
+    if len(sys.argv) < 2:
+        raise SystemExit(
+            "usage: build-v2-pilot.py stars.json\n"
+            f"Download {HYG_URL} and pass that file. The script does not fetch it."
+        )
+    source = sys.argv[1]
     if not os.path.exists(source):
-        raise SystemExit("missing /tmp/stars.json (HYG catalog)")
+        raise SystemExit(f"missing {source} (HYG catalog from {HYG_URL})")
     with open(source, "r", encoding="utf-8") as handle:
         stars = json.load(handle)
     _path, hyg_bytes, n_names = build_hyg(stars)
@@ -246,7 +249,9 @@ def main():
         "total_records": total,
         "hosts": {"pages": "", "r2": None},
         "levels": levels,
-        "hyg": "data/v2-pilot/hyg-v1.bin",
+        "hyg": "hyg-v1.bin",
+        "hyg_version": "v1",
+        "hyg_credit": "HYG database by astronexus (David Nash), CC BY-SA 4.0",
         "legacy": "data/tiles.json",
         "deep_unwritten": deep,
         "hyg_bytes": hyg_bytes,
