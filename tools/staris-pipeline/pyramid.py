@@ -874,6 +874,16 @@ def write_viewer_tiles(output_dir, levels, total_records):
     return path
 
 
+def input_record_count(shards):
+    """Input records are the sum of shard sizes divided by the 62-byte record."""
+    return sum(int(shard["size"]) // 62 for shard in shards)
+
+
+def identity_ok(input_records, coarse_written, deep_counts):
+    deep = sum(int(count) for count in deep_counts.values())
+    return int(input_records) == int(coarse_written) + deep
+
+
 def verify(output_dir, state, q8):
     manifest = load_manifest(output_dir)
     pack_records = 0
@@ -920,11 +930,14 @@ def verify(output_dir, state, q8):
         if float(mag_err.max()) > q8.MAG_ERR + 1e-9:
             raise ValueError("decoded sample exceeds the Q8 mag limit")
     write_viewer_tiles(output_dir, manifest.get("levels") or [], manifest.get("total_records") or pack_records)
+    input_records = input_record_count(manifest.get("shards") or [])
+    deep_counts = manifest.get("deep_counts") or {}
     return {
         "pass1_coarse": coarse,
         "pass2_coarse": written_coarse,
         "pack_records": pack_records,
-        "bytes_over_62": pack_records,
+        "bytes_over_62": input_records,
+        "identity_ok": identity_ok(input_records, written_coarse, deep_counts),
         "hashes_match": True,
         "samples": checked,
         "maxRaArcsec": max_err["ra"],

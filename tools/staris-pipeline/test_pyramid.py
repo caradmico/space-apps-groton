@@ -17,7 +17,22 @@ TILES = [
 ]
 
 
+def test_bytes_over_62_identity():
+    # Cara's 20-shard pilot: bytes/62 is the input total, not the coarse count.
+    coarse = 1_207_311
+    total = 4_321_186
+    deep = total - coarse
+    shards = [{"size": 62 * coarse}, {"size": 62 * deep}]
+    input_records = pyramid.input_record_count(shards)
+    assert input_records == total
+    assert input_records == sum(shard["size"] for shard in shards) // 62
+    assert pyramid.identity_ok(input_records, coarse, {"7": deep}) is True
+    assert pyramid.identity_ok(input_records, coarse, {"7": deep - 1}) is False
+    assert pyramid.identity_ok(input_records, coarse, {"7": deep // 2, "8": deep - deep // 2}) is True
+
+
 def main():
+    test_bytes_over_62_identity()
     out = tempfile.mkdtemp(prefix="pyramid-")
     try:
         manifest = pyramid.run_pipeline(
@@ -38,8 +53,12 @@ def main():
         assert report["maxDecArcsec"] <= pyramid.load_q8().DEC_ERR_ARCSEC + 1e-6
         assert report["maxMag"] <= 0.05 + 1e-9
         total_in = sum(shard["n"] for shard in manifest["shards"])
+        byte_records = sum(shard["size"] // 62 for shard in manifest["shards"])
         deep = sum(manifest["deep_counts"].values())
         assert report["pass1_coarse"] + deep == total_in
+        assert report["bytes_over_62"] == byte_records == total_in
+        assert report["identity_ok"] is True
+        assert report["bytes_over_62"] == report["pass2_coarse"] + deep
         with open(os.path.join(out, "tiles.json"), "r", encoding="utf-8") as handle:
             tiles = json.load(handle)
         assert tiles["version"] == 2

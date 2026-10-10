@@ -13,7 +13,7 @@ This work has made use of data from the European Space Agency (ESA) mission Gaia
 1. **Probe.** For each shard: size, `size % 62`, first and last `source_id`, base cells touched.
 2. **Thresholds.** One base cell at a time. Each order-6 cell keeps the brightest `M = 1024 * 7` stars by `(mag, source_id)`. When the base cell closes, picks run top-down for orders 0..6, cap 1024 per cell. That stores `tau_k`, counts, and a `(sum, xor)` id hash per order-6 cell.
 3. **Write.** A star's order is the minimum `k <= 6` with key `<= tau_k`. Stars that miss every threshold are deep: they are counted into orders 7..12, and written only if `WRITE_DEEP` is on (the R2 flag). Cells are brightest-first, Q8-encoded, written as part files (`.tmp` then rename), then assembled into packs.
-4. **Check.** Pack bytes / 8, pass-1 counts, pass-2 records, and pack `n` agree. Per-cell hashes agree. Up to 10,000 decoded records per order stay inside the Q8 error limits.
+4. **Check.** Pack bytes / 8, pass-1 counts, pass-2 records, and pack `n` agree. Per-cell hashes agree. Up to 10,000 decoded records per order stay inside the Q8 error limits. `verify.bytes_over_62` is the input record count (sum of shard bytes / 62). `verify.identity_ok` is true when that equals the coarse records written plus the deep counts.
 
 `manifest.json` in the output folder is the resume checkpoint. Units are base cells in the threshold pass and order-2 cells in the write pass. After every shard the notebook checks RSS. Over 2 GB it writes the checkpoint and stops.
 
