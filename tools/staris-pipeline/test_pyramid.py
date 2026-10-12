@@ -118,7 +118,7 @@ solution_id,designation,source_id,ra,dec,parallax,parallax_error,pm,phot_g_mean_
         os.makedirs(out_dir)
         q8 = pyramid.load_q8()
         manifest = pyramid.run_pipeline(
-            {"output_dir": out_dir, "mode": "PILOT", "adapter": "dr3_cache", "pilot_dr3": [name], "input_dirs": [cache], "rss_cap": 2*1024**3, "write_deep": False},
+            {"output_dir": out_dir, "mode": "PILOT", "adapter": "dr3_cache", "pilot_dr3": fetch2["names"], "input_dirs": [cache], "rss_cap": 2*1024**3, "write_deep": False},
             progress=lambda s: None
         )
         report = manifest["verify"]

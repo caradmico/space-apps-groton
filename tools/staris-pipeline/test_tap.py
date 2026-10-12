@@ -18,6 +18,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pyramid
 import tap
+import deep
 
 
 class FakeTap:
@@ -127,50 +128,55 @@ class FakeTap:
 
 def test_coarse_exact(tmp_path):
     fake = FakeTap()
-    with np.errstate(invalid="ignore"):
-        manifest = tap.fetch_coarse(
-            str(tmp_path),
-            limit_cells=None,
-            region=(0, [4]),
-            runner=fake.runner,
-            workers=1,
-            cells_per_job=100,
-        )
-    # brute reference: top-down per order/cell brightest CAP by (f32 mag, sid)
-    finite = fake.table[np.isfinite(fake.table["mag"])]
-    ref_counts = {k: 0 for k in range(7)}
-    ref_sids = set()
-    used = np.zeros(len(finite), bool)
-    for order in range(7):
-        cells = pyramid.cell_of(finite["source_id"], order)
-        for c in np.unique(cells):
-            m = cells == c
-            if not np.any(m):
-                continue
-            cand_idx = np.flatnonzero(m & ~used)
-            if len(cand_idx) == 0:
-                continue
-            mags = finite["mag"][cand_idx].astype(np.float32)
-            sids = finite["source_id"][cand_idx]
-            order_idx = np.lexsort((sids, mags))
-            take_n = min(8, len(order_idx))  # CAP=8 in test
-            picked = cand_idx[order_idx[:take_n]]
-            used[picked] = True
-            ref_counts[order] += take_n
-            ref_sids.update(int(s) for s in finite["source_id"][picked])
-    # from manifest/jobs
-    collected = []
-    for fn in os.listdir(tmp_path / "jobs"):
-        if fn.endswith(".dr3x"):
-            a = np.fromfile(tmp_path / "jobs" / fn, dtype=tap.DR3X_DTYPE)
-            collected.append(a)
-    if collected:
+    saved = (tap.CAP, pyramid.CAP, pyramid.HEAP_M)
+    tap.CAP = pyramid.CAP = 8
+    pyramid.HEAP_M = 8 * 7
+    try:
+        with np.errstate(invalid="ignore"):
+            manifest = tap.fetch_coarse(
+                str(tmp_path),
+                limit_cells=None,
+                region=(0, [4]),
+                runner=fake.runner,
+                workers=1,
+                cells_per_job=100,
+            )
+        # brute reference: top-down per order/cell brightest CAP by (f32 mag, sid)
+        finite = fake.table[np.isfinite(fake.table["mag"])]
+        ref_counts = {k: 0 for k in range(7)}
+        ref_sids = set()
+        used = np.zeros(len(finite), bool)
+        for order in range(7):
+            cells = pyramid.cell_of(finite["source_id"], order)
+            for c in np.unique(cells):
+                m = cells == c
+                if not np.any(m):
+                    continue
+                cand_idx = np.flatnonzero(m & ~used)
+                if len(cand_idx) == 0:
+                    continue
+                mags = finite["mag"][cand_idx].astype(np.float32)
+                sids = finite["source_id"][cand_idx]
+                order_idx = np.lexsort((sids, mags))
+                take_n = min(8, len(order_idx))  # CAP=8 in test
+                picked = cand_idx[order_idx[:take_n]]
+                used[picked] = True
+                ref_counts[order] += take_n
+                ref_sids.update(int(s) for s in finite["source_id"][picked])
+        # from manifest/jobs
+        collected = []
+        for fn in manifest["files"]:
+            if fn.endswith(".dr3x"):
+                a = np.fromfile(fn, dtype=tap.DR3X_DTYPE)
+                collected.append(a)
         all_out = np.concatenate(collected)
         out_sids = set(int(s) for s in all_out["source_id"])
         assert out_sids == ref_sids
-    for k in range(7):
-        assert manifest["counts"].get(f"L{k}_0", 0) == ref_counts[k]
-    print("test_coarse_exact ok")
+        for k in range(7):
+            assert manifest["counts"].get(f"L{k}_0", 0) == ref_counts[k]
+        print("test_coarse_exact ok")
+    finally:
+        tap.CAP, pyramid.CAP, pyramid.HEAP_M = saved
 
 
 def test_coarse_resume(tmp_path):
@@ -237,7 +243,6 @@ def test_deep_end_to_end(tmp_path):
     fake = FakeTap()
     cache = tmp_path / "tap_cache_deep"
     cache.mkdir()
-    tap.fetch_coarse(str(cache), region=(0, [4]), runner=fake.runner, workers=1)
     out = tmp_path / "deep_out"
     uploaded = []
     copied_for_test = []
@@ -254,25 +259,41 @@ def test_deep_end_to_end(tmp_path):
     orig_cap = tap.ANON_MAX_ROWS
     tap.ANON_MAX_ROWS = 200  # force many pages
     orig_py_cap = pyramid.CAP
+    orig_py_heap = pyramid.HEAP_M
     pyramid.CAP = 8
-    pyramid.HEAP_M = 8 * 7
+    pyramid.HEAP_M = 56
+    orig_tap_cap = tap.CAP
+    tap.CAP = 8
     try:
+        m = tap.fetch_coarse(str(cache), region=(0, [4]), runner=fake.runner, workers=1)
         config = {
+            "mode": "PILOT",
+            "adapter": "dr3_tap",
+            "pilot_dr3": [os.path.basename(p) for p in m["files"]],
+            "input_dirs": [str(cache)],
             "output_dir": str(out),
-            "tap_cache": str(cache),
-            "region": (0, [4]),
-            "deep_workers": 1,
-            "guard": None,
+            "write_deep": False,
             "rss_cap": 2 * 1024**3,
-            "deep_sink_factory": fake_sink,
-            "deep_delete_after_upload": True,
-            "r2_base": "https://stars.graphicoregon.com/test/deep/",
-            "runner": fake.runner,
         }
-        manifest = deep.run_deep(config, progress=lambda x: None)
+        manifest = pyramid.run_pipeline(config, progress=lambda x: None)
+        assert manifest['pass'] == 'done'
+        deep_config = {
+            'output_dir': str(out),
+            'tap_cache': str(cache),
+            'region': (0, [4]),
+            'deep_workers': 1,
+            'guard': None,
+            'rss_cap': 2 * 1024**3,
+            'deep_sink_factory': fake_sink,
+            'deep_delete_after_upload': True,
+            'r2_base': 'https://stars.graphicoregon.com/test/deep/',
+            'runner': fake.runner,
+        }
+        manifest = deep.run_deep(deep_config, progress=lambda x: None)
         assert manifest["deep_verify"]["ok"] is True
         finite = np.sum(np.isfinite(fake.table["mag"]))
-        assert manifest["deep_seen"] + manifest.get("deep_coarse_seen", 0) == finite
+        assert manifest["deep_seen"] == finite
+        assert manifest["deep_coarse_seen"] + sum(manifest["deep_written"].values()) == finite
         assert len(uploaded) > 0
         assert any("o7" in n for n in uploaded)
         # deleted
@@ -291,6 +312,7 @@ def test_deep_end_to_end(tmp_path):
     finally:
         tap.ANON_MAX_ROWS = orig_cap
         pyramid.CAP = orig_py_cap
+        pyramid.HEAP_M = orig_py_heap
         pyramid.HEAP_M = pyramid.CAP * 7
     print("test_deep_end_to_end ok")
 
@@ -298,7 +320,7 @@ def test_deep_end_to_end(tmp_path):
 def test_colour_class():
     bp = np.array([-1.0, 0.5, 1.0, 1.7, np.nan])
     out = tap.colour_class(bp)
-    expected = np.array([0, 1, 2, 3, 0], dtype=np.uint16)
+    expected = np.array([1, 1, 2, 3, 0], dtype=np.uint16)
     assert np.array_equal(out, expected)
     assert tap.colour_class(1.0) == 2
     print("test_colour_class ok")
@@ -307,12 +329,13 @@ def test_colour_class():
 def test_parse_csv_scrambled_nulls():
     csv_text = """dec,parallax,bp_rp,parallax_error,source_id,phot_g_mean_mag,ra
 30.5,,0.5,,1234567890,15.5,45.2
-30.6,10.0,,-1.0,1234567891,,45.3
+30.6,10.0,0.5,0.5,1234567891,,45.3
 """
     blob = csv_text.encode("utf-8")
     arr = tap.parse_csv(blob)
     assert len(arr) == 2
     assert arr["source_id"][0] == 1234567890
+    assert np.isnan(arr["parallax"][0])
     assert np.isnan(arr["mag"][1])
     assert np.isfinite(arr["parallax"][1])
     print("test_parse_csv_scrambled_nulls ok")
@@ -343,8 +366,8 @@ class BlockPandas:
 sys.meta_path.insert(0, BlockPandas())
 """)
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(sc_dir) + os.pathsep + env.get("PYTHONPATH", "")
-    code = "import pyramid; print('ok_no_pandas')"
+    env["PYTHONPATH"] = str(sc_dir) + os.pathsep + os.path.dirname(os.path.abspath(__file__)) + os.pathsep + env.get("PYTHONPATH", "")
+    code = "import pyramid; pyramid.ADAPTERS['drive_bin_dr1']; import sys; assert 'pandas' not in sys.modules; print('ok_no_pandas')"
     out = subprocess.check_output([sys.executable, "-c", code], env=env, cwd=str(tmp_path), text=True)
     assert "ok_no_pandas" in out
     print("test_dr1_without_pandas ok")

@@ -443,6 +443,7 @@ def split_deep(chunk, write_deep, q8):
     remaining = np.ones(chunk["source_id"].size, np.bool_)
     sids = chunk["source_id"]
     mags = chunk["mag"].astype(np.float64)
+    last_order = max(DEEP_ORDERS)
     for order in DEEP_ORDERS:
         cells = cell_of(sids, order)
         active = np.flatnonzero(remaining)
@@ -459,7 +460,10 @@ def split_deep(chunk, write_deep, q8):
             while end < ordered.size and int(cell_vals[end]) == cell:
                 end += 1
             group = ordered[start:end]
-            take = group[: min(CAP, group.size)]
+            if order == last_order:
+                take = group
+            else:
+                take = group[: min(CAP, group.size)]
             remaining[take] = False
             counts[order][cell] = int(take.size)
             if write_deep:
