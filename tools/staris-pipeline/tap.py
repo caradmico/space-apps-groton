@@ -701,6 +701,7 @@ def iter_deep_unit(
     guard=None,
     progress=print,
     stats: Optional[Dict] = None,
+    o6_cells: Optional[List[int]] = None,
 ) -> Iterator[Tuple[int, np.ndarray]]:
     if job_dir is None:
         job_dir = _job_dir_default
@@ -715,16 +716,28 @@ def iter_deep_unit(
         workers = min(5, workers)
     base_o6 = order2_cell * 256
     worker_ranges = []
-    for w in range(workers):
-        start_o6 = base_o6 + (w * 256 // workers)
-        end_o6 = base_o6 + ((w + 1) * 256 // workers)
-        lo = start_o6 << 47
-        hi = ((end_o6 << 47) - 1) if end_o6 > start_o6 else (start_o6 << 47) + (1 << 47) - 1
-        worker_ranges.append((w, lo, hi, start_o6, end_o6))
+    if o6_cells is None:
+        for w in range(workers):
+            start_o6 = base_o6 + (w * 256 // workers)
+            end_o6 = base_o6 + ((w + 1) * 256 // workers)
+            lo = start_o6 << 47
+            hi = ((end_o6 << 47) - 1) if end_o6 > start_o6 else (start_o6 << 47) + (1 << 47) - 1
+            worker_ranges.append((w, lo, hi, start_o6, end_o6))
+    else:
+        runs = []
+        for c in sorted(o6_cells):
+            if not runs or runs[-1][1] + 1 != c:
+                runs.append([c, c])
+            else:
+                runs[-1][1] = c
+        for w, (first, last) in enumerate(runs):
+            lo = first << 47
+            hi = ((last + 1) << 47) - 1
+            worker_ranges.append((w, lo, hi, first, last + 1))
     def worker_func(w: int, lo: int, hi: int):
         if guard is not None:
             guard()
-        done_path = os.path.join(job_dir, f"w{w}.done")
+        done_path = os.path.join(job_dir, f"d{order2_cell:03d}_w{w}.done")
         if os.path.exists(done_path):
             return
         last_sid = lo - 1

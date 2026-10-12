@@ -94,12 +94,28 @@ def run_deep(config, progress=print):
             continue
         if guard is not None:
             guard()
+
+        # compute o6_cells for this unit (region filter)
+        if region:
+            r_order, r_cells = region
+            if r_order >= 6:
+                shift = 2 * (r_order - 6)
+                o6_cells = sorted({c >> shift for c in r_cells if (c >> (2 * (r_order - 2))) == unit})
+            elif 3 <= r_order <= 5:
+                s = 2 * (6 - r_order)
+                o6_cells = sorted(d for rc in r_cells for d in range(rc << s, (rc + 1) << s) if (d >> 8) == unit)
+            else:
+                o6_cells = None
+        else:
+            o6_cells = None
+
         sink = deep_sink_factory() if deep_sink_factory is not None else None
         buffers = defaultdict(list)  # (order, parent) -> list[(local, encoded)]
         seen = 0
         coarse_seen = 0
         for c6, arr in tap.iter_deep_unit(
             unit,
+            o6_cells=o6_cells,
             workers=deep_workers,
             job_dir=job_dir,
             guard=guard,
