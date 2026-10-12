@@ -3,7 +3,7 @@
  * Order 0 stays resident (the far layer). Near keeps at most 12 cells.
  */
 
-import { decodeQ8, Q8_BYTES } from "../scripts/q8.js";
+import { decodeQ8, decodeQ10, Q8_BYTES, Q10_BYTES } from "../scripts/q8.js";
 import { ang2pixNest, children, pix2vecNest } from "./healpix.js";
 
 let THREE = null;
@@ -256,7 +256,10 @@ function decodeCell(held, level, local) {
   const meta = pack.cells.find((cell) => cell.local === local);
   if (!meta || meta.count === 0) return null;
   const cell = globalCell(level, local);
-  const raw = readBytes(held, pack.recordsAt + meta.start * Q8_BYTES, meta.count * Q8_BYTES);
+  const recBytes = recordBytes(held);
+  const useQ10 = recBytes === 10;
+  const decoder = useQ10 ? decodeQ10 : decodeQ8;
+  const raw = readBytes(held, pack.recordsAt + meta.start * recBytes, meta.count * recBytes);
   if (!raw) return null;
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
   const ra = new Float64Array(meta.count);
@@ -267,7 +270,7 @@ function decodeCell(held, level, local) {
   const col = new Float32Array(meta.count * 3);
   const size = new Float32Array(meta.count);
   for (let i = 0; i < meta.count; i++) {
-    const star = decodeQ8(view, i * Q8_BYTES);
+    const star = decoder(view, i * recBytes);
     ra[i] = star.ra;
     dec[i] = star.dec;
     mag[i] = star.mag;
@@ -275,9 +278,10 @@ function decodeCell(held, level, local) {
     const raR = (star.ra * Math.PI) / 180;
     const decR = (star.dec * Math.PI) / 180;
     const c = Math.cos(decR);
-    pos[i * 3] = c * Math.cos(raR) * SKY_RADIUS;
-    pos[i * 3 + 1] = c * Math.sin(raR) * SKY_RADIUS;
-    pos[i * 3 + 2] = Math.sin(decR) * SKY_RADIUS;
+    const dist = (useQ10 && isFinite(star.distPc) && star.distPc > 0) ? star.distPc : SKY_RADIUS;
+    pos[i * 3] = c * Math.cos(raR) * dist;
+    pos[i * 3 + 1] = c * Math.sin(raR) * dist;
+    pos[i * 3 + 2] = Math.sin(decR) * dist;
     const rgb = colourRGB(star.colour);
     col[i * 3] = rgb[0];
     col[i * 3 + 1] = rgb[1];
@@ -453,6 +457,26 @@ async function fetchHeader(level, url, existing) {
   return held;
 }
 
+function recordBytes(held) {
+  if (state.index && state.index.record) {
+    const record = state.index.record;
+    return record.bytes || (record.format === "q10" ? 10 : Q8_BYTES);
+  }
+  if (held && held.recBytes != null) return held.recBytes;
+  if (held && held.whole && held.fileSize != null && held.pack && !held.pack.incomplete) {
+    let totalCount = 0;
+    for (let i = 0; i < held.pack.cells.length; i++) {
+      totalCount += held.pack.cells[i].count;
+    }
+    if (totalCount > 0) {
+      const recB = (held.fileSize - held.pack.recordsAt) / totalCount;
+      held.recBytes = (recB === 10 ? 10 : Q8_BYTES);
+      return held.recBytes;
+    }
+  }
+  return Q8_BYTES;
+}
+
 async function loadCells(group) {
   const level = group[0].level;
   const held = await ensureHeader(level);
@@ -471,8 +495,8 @@ async function loadCells(group) {
   if (!pieces.length) return;
   const missing = [];
   for (const piece of pieces) {
-    const start = held.pack.recordsAt + piece.meta.start * Q8_BYTES;
-    const end = start + piece.meta.count * Q8_BYTES;
+    const start = held.pack.recordsAt + piece.meta.start * recordBytes(held);
+    const end = start + piece.meta.count * recordBytes(held);
     if (!readBytes(held, start, end - start)) missing.push({ start, end });
   }
   if (missing.length) {
@@ -512,7 +536,7 @@ function coalesce(wanted) {
       const prev = batch[batch.length - 1];
       const prevLocal = prev ? (prev.level.order <= 4 ? prev.cell : prev.cell & 1023) : -1;
       const contiguous = prev && local === prevLocal + 1;
-      const bytes = (batch.length + 1) * 1024 * Q8_BYTES;
+      const bytes = (batch.length + 1) * 1024 * recordBytes();
       if (batch.length && (!contiguous || (bytes > COALESCE_BYTES && batch.length > 1))) {
         jobs.push(batch);
         batch = [];
@@ -600,7 +624,7 @@ function makePoints(capacity) {
       void main() {
         vColor = color;
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = clamp(aSize * (64.0 / max(-mvPosition.z, 0.35)), 0.75, 16.0);
+        gl_PointSize = clamp(aSize * (64.0 / max(-mvPosition.z, 0.35)), 1.5, 16.0);
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
@@ -875,7 +899,8 @@ function updateHygFade() {
   const dist = camera.position.length();
   let alpha = 0;
   if (state.mode === "near") alpha = 1;
-  else if (dist < 80) alpha = 1 - dist / 80;
+  else if (dist < 150) alpha = 1;
+  else if (dist < 300) alpha = 1 - (dist - 150) / 150;
   state.hygAlpha = alpha;
   hygPoints.material.opacity = alpha;
   hygPoints.visible = alpha > 0.02;
@@ -1085,11 +1110,7 @@ export async function startV2() {
 
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(55, 1, 0.05, 4000);
-  const mean = new THREE.Vector3();
-  const entry0 = order0Entries()[0];
-  if (entry0) mean.set(entry0.pos[0], entry0.pos[1], entry0.pos[2]);
-  camera.position.copy(mean).multiplyScalar(1.8);
-  if (camera.position.length() < 1) camera.position.set(0, 40, 160);
+  camera.position.set(0, 25, 60);
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(el.canvasWrap.clientWidth, Math.max(el.canvasWrap.clientHeight, 1), false);
@@ -1102,7 +1123,7 @@ export async function startV2() {
   el.canvasWrap.appendChild(labelLayer);
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-  controls.target.copy(mean);
+  controls.target.set(0, 0, 0);
   controls.minDistance = 0.2;
   controls.maxDistance = SKY_RADIUS * 16;
   farPoints = makePoints(FAR_BUDGET);

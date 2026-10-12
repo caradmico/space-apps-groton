@@ -1,13 +1,19 @@
 /**
- * Q8 decoder for the BIN LOD viewer. 8 bytes, little-endian.
+ * Q8/Q10 decoder for the BIN LOD viewer. 
+ * Q8: 8 bytes, Q10: 10 bytes little-endian (Q8 + uint16 dist_q).
  * See public/bin-lod/README.md for the spec. Encoder: q8.py.
  */
 
 export const Q8_BYTES = 8;
+export const Q10_BYTES = 10;
 export const RA_CODES = 16777216;
 export const DEC_CODES = 16777215;
 export const MAG0 = -2;
 export const MAG_STEP = 0.1;
+export const LOG_D_MIN = -1.0;
+export const LOG_D_MAX = 5.0;
+export const LOG_D_STEP = (LOG_D_MAX - LOG_D_MIN) / 65534;
+export const DIST_REL_ERR = Math.pow(10, LOG_D_STEP / 2) - 1;
 
 export function decodeQ8(view, byteOffset = 0) {
   const raQ =
@@ -27,6 +33,20 @@ export function decodeQ8(view, byteOffset = 0) {
     flags,
     colour: flags & 3,
     hasParallax: (flags & 4) !== 0,
+  };
+}
+
+export function decodeQ10(view, byteOffset = 0) {
+  const q8 = decodeQ8(view, byteOffset);
+  const distQ = view.getUint16(byteOffset + 8, true);
+  let distPc = NaN;
+  if (distQ !== 0) {
+    const logD = LOG_D_MIN + (distQ - 1) * LOG_D_STEP;
+    distPc = Math.pow(10, logD);
+  }
+  return {
+    ...q8,
+    distPc,
   };
 }
 

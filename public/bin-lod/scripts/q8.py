@@ -6,12 +6,14 @@ Little-endian layout
   uint8  mag_q    mag = -2 + mag_q * 0.1
   uint8  flags    bits 0-1 colour class 0-3, bit 2 parallax present, bits 3-7 zero
 
-Round to nearest. Worst-case error is half a code:
-  |dRA * cos(Dec)| <= 360 * 3600 / 2^25 = 0.0386238… arcsec (0.0386″ to 4 d.p.)
-  |dDec|          <= 180 * 3600 / (2 * (2^24 - 1)) = 0.0193119… arcsec (0.0193″)
-  |dmag|          <= 0.05
+Q10 (v2): the above 8 bytes + uint16 dist_q (LE at bytes 8-9).
+dist_q = 0 means no distance (parallax missing/non-positive/non-finite or out of range).
+Otherwise log10(d_pc) = LOG_D_MIN + (dist_q - 1) * LOG_D_STEP with LOG_D_MIN=-1.0,
+LOG_D_MAX=5.0, STEP=(5-(-1))/65534. d=1000/plx_mas (mas); clamp log10(d); 
+dist_q=1 + round((logd - MIN)/STEP). Flags bit 2 stays "parallax present".
+Max relative distance error <= DIST_REL_ERR.
 
-Dec uses 2^24 - 1 so ±90° land on a code. RA uses 2^24 because 0° and 360° are the same direction.
+Round to nearest for all. Q8 decoding works unchanged on first 8 bytes.
 """
 
 from __future__ import annotations
@@ -29,6 +31,12 @@ MAG_STEP = 0.1
 RA_ERR_ARCSEC = 0.5 * 360.0 * 3600.0 / RA_CODES
 DEC_ERR_ARCSEC = 0.5 * 180.0 * 3600.0 / DEC_CODES
 MAG_ERR = 0.05
+
+Q10_BYTES = 10
+LOG_D_MIN = -1.0
+LOG_D_MAX = 5.0
+LOG_D_STEP = (LOG_D_MAX - LOG_D_MIN) / 65534
+DIST_REL_ERR = 10 ** (LOG_D_STEP / 2) - 1
 
 
 def _as_f64(values):
@@ -95,6 +103,68 @@ def decode_q8(raw):
     dec = dec_q / DEC_CODES * 180.0 - 90.0
     mag = MAG0 + mag_q * MAG_STEP
     return ra, dec, mag, flags
+
+
+def encode_q10(ra_deg, dec_deg, mag, colour=None, parallax_mas=None):
+    """Encode parallel arrays to (n, 10) uint8 Q10 records. parallax_mas is raw array in mas (or None)."""
+    ra = _as_f64(ra_deg)
+    dec = _as_f64(dec_deg)
+    g = _as_f64(mag)
+    n = ra.shape[0]
+    if dec.shape[0] != n or g.shape[0] != n:
+        raise ValueError("ra, dec, and mag lengths differ")
+    if parallax_mas is None:
+        has_parallax = None
+    else:
+        plx = _as_f64(parallax_mas)
+        if plx.shape[0] != n:
+            raise ValueError("parallax_mas length differs")
+        has_parallax = np.isfinite(plx) & (plx > 0.0)
+    q8 = encode_q8(ra, dec, g, colour, has_parallax)
+    out = np.empty((n, Q10_BYTES), dtype=np.uint8)
+    out[:, :8] = q8
+    if parallax_mas is None:
+        dist_q = np.zeros(n, dtype=np.uint16)
+    else:
+        plx = _as_f64(parallax_mas)
+        d = 1000.0 / plx
+        logd = np.log10(d)
+        logd = np.clip(logd, LOG_D_MIN, LOG_D_MAX)
+        dist_q = np.rint(1 + (logd - LOG_D_MIN) / LOG_D_STEP).astype(np.uint16)
+        dist_q[~np.isfinite(plx) | (plx <= 0)] = 0
+    out[:, 8] = dist_q & 0xFF
+    out[:, 9] = (dist_q >> 8) & 0xFF
+    return out
+
+
+def decode_q10(raw):
+    """Inverse of encode_q10. Returns dict of arrays; 'dist_pc' is nan when dist_q==0."""
+    buf = np.asarray(raw, dtype=np.uint8)
+    if buf.size % Q10_BYTES != 0:
+        raise ValueError("Q10 buffer length is not a multiple of 10")
+    rec = buf.reshape(-1, Q10_BYTES).astype(np.int64)
+    ra_q = rec[:, 0] | (rec[:, 1] << 8) | (rec[:, 2] << 16)
+    dec_q = rec[:, 3] | (rec[:, 4] << 8) | (rec[:, 5] << 16)
+    mag_q = rec[:, 6]
+    flags = rec[:, 7]
+    dist_q = rec[:, 8] | (rec[:, 9] << 8)
+    ra = ra_q / RA_CODES * 360.0
+    dec = dec_q / DEC_CODES * 180.0 - 90.0
+    mag = MAG0 + mag_q * MAG_STEP
+    dist_pc = np.full(ra.shape[0], np.nan, dtype=np.float64)
+    valid = dist_q > 0
+    if np.any(valid):
+        logd = LOG_D_MIN + (dist_q[valid].astype(np.float64) - 1) * LOG_D_STEP
+        dist_pc[valid] = 10 ** logd
+    return {
+        "ra": ra,
+        "dec": dec,
+        "mag": mag,
+        "flags": flags,
+        "dist_pc": dist_pc,
+        "colour": flags & 3,
+        "hasParallax": (flags & 4) != 0,
+    }
 
 
 def angular_errors(ra_deg, dec_deg, ra_out, dec_out):

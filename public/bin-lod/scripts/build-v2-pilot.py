@@ -15,7 +15,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from q8 import encode_q8  # noqa: E402
+from q8 import encode_q10  # noqa: E402
 
 REC = 62
 CAP = 1024
@@ -161,12 +161,12 @@ def build_packs(sid, ra, dec, plx, colour, mag):
             rows = sel[cells == cell]
             rank = np.lexsort((sid[rows], mag[rows]))
             rows = rows[rank]
-            encoded = encode_q8(
+            encoded = encode_q10(
                 ra[rows],
                 dec[rows],
                 mag[rows],
                 colour[rows],
-                np.isfinite(plx[rows]) & (plx[rows] > 0),
+                plx[rows],
             )
             pack_id, parent, local = pack_parts(k, cell)
             buckets.setdefault((k, pack_id, parent), []).append((local, encoded))
@@ -245,7 +245,7 @@ def main():
         "version": 2,
         "scheme": "healpix_nested_exclusive",
         "cap": CAP,
-        "record": {"format": "q8", "bytes": 8},
+        "record": {"format": "q10", "bytes": 10},
         "total_records": total,
         "hosts": {"pages": "", "r2": None},
         "levels": levels,

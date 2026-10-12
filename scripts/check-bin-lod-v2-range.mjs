@@ -14,6 +14,8 @@ import http from "node:http";
 import path from "node:path";
 import { decodeQ8, Q8_BYTES } from "../public/bin-lod/scripts/q8.js";
 
+let REC_BYTES = Q8_BYTES; // set from tiles.json record.bytes (8 = Q8, 10 = Q10; first 8 bytes identical)
+
 const ROOT = path.resolve("public/bin-lod");
 const PORT = 8781;
 const CDP_PORT = 9351;
@@ -193,10 +195,10 @@ function parsePack(buf) {
 
 function decodeRecords(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const n = bytes.byteLength / Q8_BYTES;
+  const n = bytes.byteLength / REC_BYTES;
   const out = [];
   for (let i = 0; i < n; i++) {
-    const star = decodeQ8(view, i * Q8_BYTES);
+    const star = decodeQ8(view, i * REC_BYTES);
     out.push([star.ra, star.dec, star.mag, star.colour]);
   }
   return out;
@@ -212,6 +214,7 @@ function sameStars(a, b) {
 
 function packedCell() {
   const index = JSON.parse(fs.readFileSync(path.join(ROOT, "data/v2-pilot/tiles.json"), "utf8"));
+  REC_BYTES = (index.record && index.record.bytes) || Q8_BYTES;
   const level = index.levels.find((item) => item.order === 6 && item.n > 0);
   if (!level) throw new Error("no order-6 pack");
   const file = path.join(ROOT, "data/v2-pilot", level.pack);
@@ -307,7 +310,7 @@ async function main() {
       const local = near.order <= 4 ? near.cell : near.cell & 1023;
       const meta = pack.cells.find((item) => item.local === local);
       if (!meta || meta.count !== near.count) throw new Error(`cell ${near.order}:${near.cell} count ${near.count} != ${meta && meta.count}`);
-      const slice = buf.subarray(pack.recordsAt + meta.start * Q8_BYTES, pack.recordsAt + (meta.start + meta.count) * Q8_BYTES);
+      const slice = buf.subarray(pack.recordsAt + meta.start * REC_BYTES, pack.recordsAt + (meta.start + meta.count) * REC_BYTES);
       const fromRange = decodeRecords(Buffer.from(near.hex, "hex"));
       const fromFile = decodeRecords(slice);
       if (!sameStars(fromRange, fromFile)) throw new Error(`records differ ${near.order}:${near.cell}`);
