@@ -102,7 +102,7 @@ def main():
             "pilot_dr3": dr3_names,
             "input_dirs": [str(tap_cache)],
             "r2_base": args.r2_base,
-            "write_deep": bool(args.deep),
+            "write_deep": False,
             "deep_source": "tap",
             "rss_cap": 2 * 1024**3,
             "guard": guard,

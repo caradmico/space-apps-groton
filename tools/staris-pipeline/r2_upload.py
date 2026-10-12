@@ -40,7 +40,10 @@ def _cred(name, secrets_dir=None):
 
 def client(secrets_dir=None):
     import boto3
-    account = _cred("CLOUDFLARE_ACCOUNT_ID", secrets_dir)
+    for v in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"):
+        if not _cred(v, secrets_dir):
+            raise RuntimeError(f"missing {v}")
+    account = _cred("R2_ACCOUNT_ID", secrets_dir)
     return boto3.client(
         "s3",
         endpoint_url=f"https://{account}.r2.cloudflarestorage.com",

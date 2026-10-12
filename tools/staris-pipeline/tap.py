@@ -546,6 +546,9 @@ def fetch_coarse(
     t_start = time.time()
     os.makedirs(cache_dir, exist_ok=True)
     manifest = _load_tap_manifest(cache_dir)
+    if manifest.get('files') and manifest.get('level', 0) >= 7 and all(os.path.exists(p) for p in manifest['files']):
+        progress('coarse fetch already complete')
+        return manifest
     if region is None:
         region = (2, pilot_order2) if pilot_order2 else None
     if limit_cells is not None:
