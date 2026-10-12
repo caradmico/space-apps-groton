@@ -57,7 +57,7 @@ v2 places Q10 stars at that distance in pc, the same as v1. Check the pilot pack
 
 Order 0 is the resident far layer (cap 12,288) and replaces the preview in this mode. Near keeps at most 12 HEALPix cells (cap 12,288), picked by projected size, ancestors first, refined past about 256 px. Two pack fetches at a time. Contiguous cells share one Range GET. The decoded cache evicts the farthest cells past 128. A `206` body is only the requested byte range: the header is parsed from the header bytes, and a cell already inside a loaded range is not fetched again.
 
-`data/v2-pilot/hyg-v1.bin` is HYG v1, the 8,000-star catalog: float32 xyz, one magnitude byte, and 207 names (about 104 KB plus the name table). It fades in near the Sun and in NEAR mode. Matched Gaia points are hidden while it is visible. Names are drawn only while that layer is visible.
+`data/v2-pilot/hyg-v1.bin` is HYG v1, the 8,000-star catalog: float32 xyz, one magnitude byte, and 206 names (about 104 KB plus the name table). It fades in near the Sun and in NEAR mode. Matched Gaia points are hidden while it is visible. Names are drawn only while that layer is visible.
 
 Rebuild from the nine tiles (does not touch the v1 files). Download the HYG catalog yourself and pass that path (the script does not fetch it):
 

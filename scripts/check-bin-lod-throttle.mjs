@@ -1,3 +1,4 @@
+// Run: node --experimental-websocket scripts/check-bin-lod-throttle.mjs (Node 20; Node 22+ has WebSocket built in).
 /**
  * Time-to-first-frame under one shared network pipe.
  *
@@ -13,7 +14,7 @@ import http from "node:http";
 import path from "node:path";
 
 const ROOT = path.resolve("public/bin-lod");
-const PORT = 8765;
+const PORT = Number(process.env.BIN_LOD_PORT || 8796);
 const CDP_PORT = 9334;
 const TOTAL_RECORDS = 639404;
 const BYTES_PER_SEC = (4000 * 1000) / 8;

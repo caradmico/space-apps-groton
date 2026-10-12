@@ -1,3 +1,4 @@
+// Run: node --experimental-websocket scripts/check-bin-lod-progressive.mjs (Node 20; Node 22+ has WebSocket built in).
 /**
  * Confirms the BIN LOD viewer draws the first arrived tile before the rest,
  * then fills those tiles into the same page.
@@ -15,7 +16,7 @@ const FAST_TILE = "tile-004.bin";
 const FAST_RECORDS = 72818;
 const TOTAL_RECORDS = 639404;
 const SLOW_MS = 4500;
-const PORT = 8765;
+const PORT = Number(process.env.BIN_LOD_PORT || 8795);
 const CDP_PORT = 9333;
 
 const requests = [];

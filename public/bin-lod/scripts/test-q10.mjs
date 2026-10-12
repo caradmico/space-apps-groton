@@ -1,4 +1,5 @@
 import fs from 'fs';
+import assert from 'node:assert/strict';
 import { decodeQ10, Q10_BYTES } from './q8.js';
 
 const tiles = JSON.parse(fs.readFileSync('data/v2-pilot/tiles.json', 'utf8'));
@@ -28,4 +29,9 @@ for (const level of tiles.levels || []) {
   }
 }
 
+assert(records > 0);
+assert(!tiles.total_records || records === tiles.total_records);
+assert(withDist > 0);
+assert(minPc >= 0.1*(1-1e-3));
+assert(maxPc <= 1e5*(1+1e-3));
 console.log(JSON.stringify({records, withDist, minPc, maxPc}));
