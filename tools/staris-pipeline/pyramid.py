@@ -19,6 +19,7 @@ HEAP_M = CAP * 7
 COARSE_ORDERS = range(7)
 DEEP_ORDERS = range(7, 13)
 REC = 62
+REC_OUT = 10
 REC_DTYPE = np.dtype(
     [
         ("source_id", "<i8"),
@@ -428,9 +429,9 @@ def _encode_rows(chunk, indexes, q8):
     dec = chunk["dec"][indexes]
     mag = chunk["mag"][indexes].astype(np.float64)
     colour = chunk["colour"][indexes]
-    plx = np.isfinite(chunk["parallax"][indexes]) & (chunk["parallax"][indexes] > 0)
+    plx = chunk["parallax"][indexes]
     # brightest first: indexes arrive already sorted by mag, sid
-    return q8.encode_q8(ra, dec, mag, colour, plx)
+    return q8.encode_q10(ra, dec, mag, colour, plx)
 
 
 def _pack_key(order, cell):
@@ -632,12 +633,12 @@ def _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8)
 def _encode_block(block, q8):
     order_idx = np.lexsort((block["source_id"], block["mag"].astype(np.float64)))
     block = block[order_idx]
-    encoded = q8.encode_q8(
+    encoded = q8.encode_q10(
         block["ra"],
         block["dec"],
         block["mag"].astype(np.float64),
         block["colour"],
-        np.isfinite(block["parallax"]) & (block["parallax"] > 0),
+        block["parallax"],
     )
     return block, encoded
 
@@ -665,7 +666,7 @@ def _read_parts(part_dir):
             order, n_cells = struct.unpack("<II", handle.read(8))
             for _ in range(n_cells):
                 cell, count = struct.unpack("<II", handle.read(8))
-                raw = np.frombuffer(handle.read(count * 8), dtype=np.uint8).copy().reshape(count, 8)
+                raw = np.frombuffer(handle.read(count * 10), dtype=np.uint8).copy().reshape(count, 10)
                 pack_id, _parent, local = _pack_key(order, cell)
                 grouped.setdefault((order, pack_id), {}).setdefault(local, []).append(raw)
     return grouped
@@ -695,6 +696,7 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress):
                     "dec": float(block["dec"][i]),
                     "mag": float(block["mag"][i]),
                     "q8": encoded[i].tobytes().hex(),
+                    "parallax": float(block["parallax"][i]),
                 },
                 10000,
                 rng,
@@ -859,7 +861,7 @@ def write_viewer_tiles(output_dir, levels, total_records):
         "version": 2,
         "scheme": "healpix_nested_exclusive",
         "cap": CAP,
-        "record": {"format": "q8", "bytes": 8},
+        "record": {"format": "q10", "bytes": 10},
         "total_records": int(total_records),
         "hosts": {"pages": "", "r2": None},
         "levels": viewer_levels,
@@ -891,6 +893,7 @@ def identity_ok(input_records, coarse_written, deep_counts):
 
 
 def verify(output_dir, state, q8):
+    """Fixed verify(): uses parallax stored in samples.json; distance check only on finite plx>0 with 1000/plx in [10^LOG_D_MIN, 10^LOG_D_MAX]; reports max_dist_rel_err."""
     manifest = load_manifest(output_dir)
     pack_records = 0
     header_n = 0
@@ -900,8 +903,8 @@ def verify(output_dir, state, q8):
         n = sum(count for _local, _start, count in pack["cells"])
         if n != level["n"]:
             raise ValueError(f"{level['pack']} header n {n} != manifest {level['n']}")
-        if pack["payload"].size != n * 8:
-            raise ValueError(f"{level['pack']} payload bytes != n*8")
+        if pack["payload"].size != n * 10:
+            raise ValueError(f"{level['pack']} payload bytes != n*10")
         pack_records += n
         header_n += n
     coarse = sum(int(manifest["coarse_counts"][str(k)]) for k in COARSE_ORDERS)
@@ -916,6 +919,7 @@ def verify(output_dir, state, q8):
     with open(os.path.join(output_dir, "samples.json"), "r", encoding="utf-8") as handle:
         samples = json.load(handle)
     max_err = {"ra": 0.0, "dec": 0.0, "mag": 0.0}
+    max_dist_rel_err = 0.0
     checked = 0
     for _order, rows in samples.items():
         if not rows:
@@ -923,8 +927,10 @@ def verify(output_dir, state, q8):
         ra = np.array([row["ra"] for row in rows], np.float64)
         dec = np.array([row["dec"] for row in rows], np.float64)
         mag = np.array([row["mag"] for row in rows], np.float64)
+        plx = np.array([row.get("parallax") or np.nan for row in rows], np.float64)
         encoded = np.vstack([np.frombuffer(bytes.fromhex(row["q8"]), dtype=np.uint8) for row in rows])
-        back_ra, back_dec, back_mag, _flags = q8.decode_q8(encoded)
+        decoded = q8.decode_q10(encoded)
+        back_ra, back_dec, back_mag = decoded["ra"], decoded["dec"], decoded["mag"]
         ra_err, dec_err = q8.angular_errors(ra, dec, back_ra, back_dec)
         mag_err = np.abs(back_mag - mag)
         max_err["ra"] = max(max_err["ra"], float(ra_err.max()))
@@ -935,6 +941,19 @@ def verify(output_dir, state, q8):
             raise ValueError("decoded sample exceeds the Q8 angular limits")
         if float(mag_err.max()) > q8.MAG_ERR + 1e-9:
             raise ValueError("decoded sample exceeds the Q8 mag limit")
+        dpc = decoded["dist_pc"]
+        has_plx = np.isfinite(plx) & (plx > 0)
+        if np.any(has_plx):
+            d_from_plx = 1000.0 / plx[has_plx]
+            in_range = (d_from_plx >= 10 ** q8.LOG_D_MIN) & (d_from_plx <= 10 ** q8.LOG_D_MAX)
+            if np.any(in_range):
+                valid_d = np.isfinite(dpc[has_plx][in_range])
+                if np.any(valid_d):
+                    rel_err = np.abs((dpc[has_plx][in_range][valid_d] - d_from_plx[in_range][valid_d]) / dpc[has_plx][in_range][valid_d])
+                    this_max = float(rel_err.max())
+                    max_dist_rel_err = max(max_dist_rel_err, this_max)
+                    if this_max > q8.DIST_REL_ERR * 1.0001:
+                        raise ValueError("decoded sample exceeds DIST_REL_ERR")
     write_viewer_tiles(output_dir, manifest.get("levels") or [], manifest.get("total_records") or pack_records)
     input_records = input_record_count(manifest.get("shards") or [])
     deep_counts = manifest.get("deep_counts") or {}
@@ -949,4 +968,5 @@ def verify(output_dir, state, q8):
         "maxRaArcsec": max_err["ra"],
         "maxDecArcsec": max_err["dec"],
         "maxMag": max_err["mag"],
+        "maxDistRelErr": max_dist_rel_err,
     }

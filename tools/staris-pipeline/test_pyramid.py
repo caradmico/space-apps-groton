@@ -65,7 +65,7 @@ def main():
         assert not os.path.exists(os.path.join(out, "tiles.json"))
         assert tiles["version"] == 2
         assert tiles["scheme"] == "healpix_nested_exclusive"
-        assert tiles["record"] == {"format": "q8", "bytes": 8}
+        assert tiles["record"] == {"format": "q10", "bytes": 10}
         assert tiles["total_records"] == report["pack_records"]
         assert tiles["levels"]
         saw_root = False
