@@ -7,7 +7,7 @@ Little-endian layout
   uint8  flags    bits 0-1 colour class 0-3, bit 2 parallax present, bits 3-7 zero
 
 Q10 (v2): the above 8 bytes + uint16 dist_q (LE at bytes 8-9).
-dist_q = 0 means no distance (parallax missing/non-positive/non-finite or out of range).
+dist_q = 0 means no distance (parallax missing/non-positive/non-finite). Out-of-range distances are clamped to [0.1, 1e5] pc.
 Otherwise log10(d_pc) = LOG_D_MIN + (dist_q - 1) * LOG_D_STEP with LOG_D_MIN=-1.0,
 LOG_D_MAX=5.0, STEP=(5-(-1))/65534. d=1000/plx_mas (mas); clamp log10(d); 
 dist_q=1 + round((logd - MIN)/STEP). Flags bit 2 stays "parallax present".
@@ -127,11 +127,13 @@ def encode_q10(ra_deg, dec_deg, mag, colour=None, parallax_mas=None):
         dist_q = np.zeros(n, dtype=np.uint16)
     else:
         plx = _as_f64(parallax_mas)
-        d = 1000.0 / plx
-        logd = np.log10(d)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            d = 1000.0 / plx
+            logd = np.log10(d)
         logd = np.clip(logd, LOG_D_MIN, LOG_D_MAX)
-        dist_q = np.rint(1 + (logd - LOG_D_MIN) / LOG_D_STEP).astype(np.uint16)
-        dist_q[~np.isfinite(plx) | (plx <= 0)] = 0
+        valid = np.isfinite(plx) & (plx > 0.0)
+        dist_q = np.zeros(n, dtype=np.uint16)
+        dist_q[valid] = np.rint(1 + (logd[valid] - LOG_D_MIN) / LOG_D_STEP).astype(np.uint16)
     out[:, 8] = dist_q & 0xFF
     out[:, 9] = (dist_q >> 8) & 0xFF
     return out

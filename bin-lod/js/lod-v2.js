@@ -14,6 +14,7 @@ const NEAR_BUDGET = 12288;
 const NEAR_ENTER = 36;
 const NEAR_EXIT = 44;
 const SKY_RADIUS = 100;
+const MAX_DIST_PC = 1e5;
 const REFINE_PX = 256;
 const CACHE_LIMIT = 128;
 const MAX_IN_FLIGHT = 2;
@@ -528,6 +529,7 @@ function coalesce(wanted) {
     groups.set(item.level.pack, list);
   }
   const jobs = [];
+  const recBytes = recordBytes(); // from state.index.record (no item.held here)
   for (const list of groups.values()) {
     list.sort((a, b) => a.cell - b.cell);
     let batch = [];
@@ -536,7 +538,7 @@ function coalesce(wanted) {
       const prev = batch[batch.length - 1];
       const prevLocal = prev ? (prev.level.order <= 4 ? prev.cell : prev.cell & 1023) : -1;
       const contiguous = prev && local === prevLocal + 1;
-      const bytes = (batch.length + 1) * 1024 * recordBytes();
+      const bytes = (batch.length + 1) * 1024 * recBytes;
       if (batch.length && (!contiguous || (bytes > COALESCE_BYTES && batch.length > 1))) {
         jobs.push(batch);
         batch = [];
@@ -945,7 +947,7 @@ function focus(name) {
   controls.target.set(star.x, star.y, star.z);
   camera.position.set(star.x + 1.2, star.y + 0.4, star.z + 3.5);
   camera.near = 0.01;
-  camera.far = 5000;
+  camera.far = MAX_DIST_PC * 2.2;
   camera.updateProjectionMatrix();
   return true;
 }
@@ -955,7 +957,7 @@ function aimAt(ux, uy, uz) {
   // Close enough for NEAR, far enough that the leaf is an order-4 cell (those packs cover the sky).
   camera.position.set(ux * (SKY_RADIUS + 12), uy * (SKY_RADIUS + 12), uz * (SKY_RADIUS + 12));
   camera.near = 0.01;
-  camera.far = 5000;
+  camera.far = MAX_DIST_PC * 2.2;
   camera.updateProjectionMatrix();
   return true;
 }
@@ -1109,9 +1111,10 @@ export async function startV2() {
   scratch = new THREE.Vector3();
 
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(55, 1, 0.05, 4000);
-  camera.position.set(0, 25, 60);
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  camera = new THREE.PerspectiveCamera(55, 1, 0.05, MAX_DIST_PC * 2.2);
+  // ~1 pc from Sun (OrbitControls needs nonzero offset); stars at real parallax dist up to 1e5 pc
+  camera.position.set(0, 0.3, 1);
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, logarithmicDepthBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(el.canvasWrap.clientWidth, Math.max(el.canvasWrap.clientHeight, 1), false);
   renderer.setClearColor(0x000000, 0);
@@ -1125,7 +1128,7 @@ export async function startV2() {
   controls.enableDamping = true;
   controls.target.set(0, 0, 0);
   controls.minDistance = 0.2;
-  controls.maxDistance = SKY_RADIUS * 16;
+  controls.maxDistance = MAX_DIST_PC;
   farPoints = makePoints(FAR_BUDGET);
   nearPoints = makePoints(NEAR_BUDGET);
   scene.add(farPoints.points);
