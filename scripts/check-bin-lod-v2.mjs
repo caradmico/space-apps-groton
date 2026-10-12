@@ -238,6 +238,7 @@ async function main() {
       throw new Error(`labels ${JSON.stringify(focused.labels)}`);
     }
     if (maxInFlight > 2) throw new Error(`in flight ${maxInFlight}`);
+    if (cdp.consoleLines.length) throw new Error(`console errors: ${cdp.consoleLines.slice(0, 6).join(" | ")}`);
     console.log(JSON.stringify({
       first,
       maxInFlight,

@@ -196,12 +196,14 @@ def build_hyg(stars):
     xyz = np.zeros((n, 3), np.float32)
     mag_q = np.zeros(n, np.uint8)
     names = []
+    seen = set()
     for i, star in enumerate(stars):
         xyz[i] = (star["x"], star["y"], star["z"])
         q = int(np.rint((float(star["mag"]) - HYG_MAG0) / HYG_STEP))
         mag_q[i] = max(0, min(255, q))
         proper = star.get("proper") or ""
-        if proper:
+        if proper and proper not in seen:
+            seen.add(proper)
             names.append((i, proper))
     blob = bytearray()
     blob += b"HYG1"

@@ -14,6 +14,9 @@ import sys
 
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dr3  # noqa: E402
+
 CAP = 1024
 HEAP_M = CAP * 7
 COARSE_ORDERS = range(7)
@@ -33,6 +36,11 @@ REC_DTYPE = np.dtype(
         ("mag", "<f4"),
     ]
 )
+REC_SIZE = {
+    "drive_bin_dr1": 62,
+    "esa_csv": None,
+    "dr3_cache": 32,
+}
 PILOT_SHARDS = [
     "GaiaSource_000-000-000.bin",
     "GaiaSource_000-000-150.bin",
@@ -165,32 +173,38 @@ def _csv_chunk(rows):
 ADAPTERS = {
     "drive_bin_dr1": iter_bin_records,
     "esa_csv": iter_esa_csv,
+    "dr3_cache": dr3.iter_dr3c,
 }
 
 
-def discover_shards(input_dirs, mode, pilot_names, shard_paths=None):
+def discover_shards(input_dirs, mode, pilot_names, shard_paths=None, suffix=".bin"):
     if shard_paths:
         return list(shard_paths)
     found = {}
     for folder in input_dirs:
         for dirpath, _dirs, files in os.walk(folder):
             for name in files:
-                if name.startswith("GaiaSource_") and name.endswith(".bin"):
+                if name.startswith("GaiaSource_") and name.endswith(suffix):
                     found[name] = os.path.join(dirpath, name)
     if mode == "PILOT":
-        missing = [name for name in pilot_names if name not in found]
-        if missing:
-            raise FileNotFoundError("pilot shards not in the StarIS Drive folders: " + ", ".join(missing))
-        return [found[name] for name in pilot_names]
+        if suffix == ".bin":
+            missing = [name for name in pilot_names if name not in found]
+            if missing:
+                raise FileNotFoundError("pilot shards not in the StarIS Drive folders: " + ", ".join(missing))
+            return [found[name] for name in pilot_names]
+        else:
+            # for dr3_cache PILOT uses every .dr3c found (cache holds only pilot files); sorted by name
+            return [found[name] for name in sorted(found)]
     if mode != "FULL":
         raise ValueError(f"unknown mode {mode}")
     return [found[name] for name in sorted(found)]
 
 
-def probe_shard(path, adapter):
+def probe_shard(path, adapter, rec_size=62):
     size = os.path.getsize(path)
     first = last = None
     n = 0
+    n_skipped = 0
     bases = set()
     prev = None
     for chunk in adapter(path):
@@ -206,19 +220,29 @@ def probe_shard(path, adapter):
             first = int(sids[0])
         last = int(sids[-1])
         n += int(sids.size)
+        ra = chunk["ra"]
+        dec = chunk["dec"]
+        mag = chunk["mag"]
+        bad = ~(np.isfinite(ra) & np.isfinite(dec) & np.isfinite(mag))
+        n_skipped += int(np.sum(bad))
         bases.update(int(v) for v in np.unique(cell_of(sids, 0)))
-    return {
+    info = {
         "name": os.path.basename(path),
         "path": path,
         "size": size,
-        "size_mod_62": size % 62,
+        "rec_size": rec_size,
+        "size_mod_rec": size % rec_size if rec_size is not None else 0,
         "n": n,
+        "n_skipped": n_skipped,
         "first_id": first,
         "last_id": last,
         "first_base": None if first is None else int(cell_of(first, 0)),
         "last_base": None if last is None else int(cell_of(last, 0)),
         "bases": sorted(bases),
     }
+    if rec_size == 62:
+        info["size_mod_62"] = size % 62
+    return info
 
 
 def _heap_insert(mag_h, sid_h, n_h, local, mag, sid):
@@ -511,12 +535,15 @@ def run_pipeline(config, progress=print):
     adapter = ADAPTERS[adapter_name]
     mode = config.get("mode", "PILOT")
     write_deep = bool(config.get("write_deep", False))
+    suffix = ".dr3c" if adapter_name == "dr3_cache" else ".bin"
+    rec_size = REC_SIZE.get(adapter_name, 62)
     os.makedirs(output_dir, exist_ok=True)
     manifest = load_manifest(output_dir) or {
         "version": 1,
         "adapter": adapter_name,
         "mode": mode,
         "write_deep": write_deep,
+        "rec_size": rec_size,
         "cap": CAP,
         "pass": "probe",
         "shards": [],
@@ -527,13 +554,14 @@ def run_pipeline(config, progress=print):
         mode,
         config.get("pilot_shards") or PILOT_SHARDS,
         config.get("shard_paths"),
+        suffix=suffix,
     )
     if not paths:
         raise FileNotFoundError("no shards")
 
     q8 = load_q8()
     try:
-        return _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8)
+        return _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8, rec_size)
     except RssExceeded as exc:
         manifest["aborted"] = "rss"
         manifest["rss"] = exc.rss
@@ -542,20 +570,21 @@ def run_pipeline(config, progress=print):
         raise
 
 
-def _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8):
+def _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8, rec_size=62):
+    adapter_name = manifest.get("adapter", "drive_bin_dr1")
     if manifest["pass"] == "probe" or not manifest["shards"]:
         shards = []
         prev_last = None
         for path in paths:
-            info = probe_shard(path, adapter)
-            if info["size_mod_62"] != 0:
-                raise ValueError(f"{info['name']} size {info['size']} is not divisible by 62")
+            info = probe_shard(path, adapter, rec_size=rec_size)
+            if info.get("rec_size") is not None and info["size_mod_rec"] != 0:
+                raise ValueError(f"{info['name']} size {info['size']} is not divisible by {info['rec_size']}")
             if prev_last is not None and info["first_id"] is not None and info["first_id"] < prev_last:
                 raise ValueError(f"{info['name']} starts before the previous shard ended")
             prev_last = info["last_id"]
             shards.append(info)
             manifest["shards"] = shards
-            progress(f"probe {info['name']} n={info['n']} bytes={info['size']} mod62={info['size_mod_62']} ids={info['first_id']}..{info['last_id']} bases={info['bases']}")
+            progress(f"probe {info['name']} n={info['n']} bytes={info['size']} mod={info.get('size_mod_rec')} ids={info['first_id']}..{info['last_id']} bases={info['bases']}")
             rss = check_rss(cap, manifest_path(output_dir))
             manifest["rss"] = rss
             save_manifest(output_dir, manifest)
@@ -615,7 +644,7 @@ def _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8)
         state = _load_state(state_path)
 
     if manifest["pass"] == "write":
-        _write_pass(config, adapter, shards, state, q8, manifest, cap, progress)
+        _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec_size)
         manifest["pass"] = "verify"
         save_manifest(output_dir, manifest)
 
@@ -666,13 +695,13 @@ def _read_parts(part_dir):
             order, n_cells = struct.unpack("<II", handle.read(8))
             for _ in range(n_cells):
                 cell, count = struct.unpack("<II", handle.read(8))
-                raw = np.frombuffer(handle.read(count * 10), dtype=np.uint8).copy().reshape(count, 10)
+                raw = np.frombuffer(handle.read(count * REC_OUT), dtype=np.uint8).copy().reshape(count, REC_OUT)
                 pack_id, _parent, local = _pack_key(order, cell)
                 grouped.setdefault((order, pack_id), {}).setdefault(local, []).append(raw)
     return grouped
 
 
-def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress):
+def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec_size=62):
     output_dir = config["output_dir"]
     write_deep = bool(config.get("write_deep", False))
     part_dir = os.path.join(output_dir, "parts")
@@ -680,6 +709,7 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress):
     rng = np.random.default_rng(7)
     sample = {order: {"seen": 0, "rows": []} for order in list(COARSE_ORDERS) + list(DEEP_ORDERS)}
     pass2_counts = {order: 0 for order in list(COARSE_ORDERS) + list(DEEP_ORDERS)}
+    pass2_with_distance = 0
     hsum = np.zeros_like(state["hash_sum"])
     hxor = np.zeros_like(state["hash_xor"])
     hcount = np.zeros_like(state["hash_count"])
@@ -770,6 +800,8 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress):
                     deep_buf.append(row.copy())
                     continue
                 pass2_counts[order] += 1
+                if np.isfinite(chunk["parallax"][i]):
+                    pass2_with_distance += 1
                 hsum[o6] = np.uint64((int(hsum[o6]) + sid) & 0xFFFFFFFFFFFFFFFF)
                 hxor[o6] = np.bitwise_xor(np.uint64(hxor[o6]), np.uint64(sid))
                 hcount[o6] += 1
@@ -790,7 +822,6 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress):
         merged = []
         for local, pieces in locals_map.items():
             encoded = np.concatenate(pieces, axis=0)
-            # Q8 mag byte is the sort key; source order inside a mag uses the existing order.
             mags = encoded[:, 6]
             encoded = encoded[np.argsort(mags, kind="stable")]
             merged.append((local, encoded))
@@ -823,6 +854,8 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress):
         json.dump(serial, handle)
     np.savez(os.path.join(output_dir, "pass2_hashes.npz"), hash_sum=hsum, hash_xor=hxor, hash_count=hcount)
     manifest["pass2_counts"] = {str(k): int(v) for k, v in pass2_counts.items()}
+    manifest["pass2_with_distance"] = int(pass2_with_distance)
+    manifest["distance_stats"] = {"pass2_with_distance": int(pass2_with_distance)}
     manifest["deep_counts"] = {str(order): int(sum(cells.values())) for order, cells in deep_counts.items()}
     manifest["levels"] = levels
     manifest["total_records"] = int(total_records)
@@ -883,17 +916,23 @@ def write_viewer_tiles(output_dir, levels, total_records):
 
 
 def input_record_count(shards):
-    """Input records are the sum of shard sizes divided by the 62-byte record."""
-    return sum(int(shard["size"]) // 62 for shard in shards)
+    total = 0
+    for shard in shards:
+        rec_size = shard.get("rec_size", 62)
+        if rec_size is None:
+            total += shard.get("n", 0)
+        else:
+            total += int(shard["size"]) // rec_size
+    return total
 
 
-def identity_ok(input_records, coarse_written, deep_counts):
+def identity_ok(input_records, coarse_written, deep_counts, skipped=0):
     deep = sum(int(count) for count in deep_counts.values())
-    return int(input_records) == int(coarse_written) + deep
+    return int(input_records) == int(coarse_written) + deep + int(skipped)
 
 
 def verify(output_dir, state, q8):
-    """Fixed verify(): uses parallax stored in samples.json; distance check only on finite plx>0 with 1000/plx in [10^LOG_D_MIN, 10^LOG_D_MAX]; reports max_dist_rel_err."""
+    """Fixed verify(): uses parallax stored in samples.json; distance check only on finite plx>0 with 1000/plx in [10^LOG_D_MIN, 10^LOG_D_MAX]; reports max_dist_rel_err. Supports skipped_nonfinite."""
     manifest = load_manifest(output_dir)
     pack_records = 0
     header_n = 0
@@ -909,6 +948,7 @@ def verify(output_dir, state, q8):
         header_n += n
     coarse = sum(int(manifest["coarse_counts"][str(k)]) for k in COARSE_ORDERS)
     written_coarse = sum(int(manifest["pass2_counts"][str(k)]) for k in COARSE_ORDERS)
+    pass2_with_distance = manifest.get("pass2_with_distance", 0)
     if not manifest.get("write_deep"):
         if pack_records != coarse or written_coarse != coarse or header_n != coarse:
             raise ValueError(
@@ -916,6 +956,10 @@ def verify(output_dir, state, q8):
             )
     if not manifest.get("coarse_hashes_match"):
         raise ValueError("per-cell hashes do not match")
+    shards = manifest.get("shards") or []
+    input_records = input_record_count(shards)
+    total_skipped = sum(int(s.get("n_skipped", 0)) for s in shards)
+    deep_counts = manifest.get("deep_counts") or {}
     with open(os.path.join(output_dir, "samples.json"), "r", encoding="utf-8") as handle:
         samples = json.load(handle)
     max_err = {"ra": 0.0, "dec": 0.0, "mag": 0.0}
@@ -955,18 +999,19 @@ def verify(output_dir, state, q8):
                     if this_max > q8.DIST_REL_ERR * 1.0001:
                         raise ValueError("decoded sample exceeds DIST_REL_ERR")
     write_viewer_tiles(output_dir, manifest.get("levels") or [], manifest.get("total_records") or pack_records)
-    input_records = input_record_count(manifest.get("shards") or [])
-    deep_counts = manifest.get("deep_counts") or {}
+    pct_with_distance = round(100.0 * pass2_with_distance / written_coarse, 3) if written_coarse > 0 else 0.0
     return {
         "pass1_coarse": coarse,
         "pass2_coarse": written_coarse,
         "pack_records": pack_records,
         "bytes_over_62": input_records,
-        "identity_ok": identity_ok(input_records, written_coarse, deep_counts),
+        "identity_ok": identity_ok(input_records, written_coarse, deep_counts, total_skipped),
         "hashes_match": True,
         "samples": checked,
         "maxRaArcsec": max_err["ra"],
         "maxDecArcsec": max_err["dec"],
         "maxMag": max_err["mag"],
         "maxDistRelErr": max_dist_rel_err,
+        "pct_with_distance": pct_with_distance,
+        "skipped_nonfinite": total_skipped,
     }
