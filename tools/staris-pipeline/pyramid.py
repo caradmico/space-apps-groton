@@ -11,11 +11,12 @@ import json
 import os
 import struct
 import sys
+from collections import defaultdict
+import urllib.parse
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import dr3  # noqa: E402
 
 CAP = 1024
 HEAP_M = CAP * 7
@@ -40,6 +41,7 @@ REC_SIZE = {
     "drive_bin_dr1": 62,
     "esa_csv": None,
     "dr3_cache": 32,
+    "dr3_tap": 36,
 }
 PILOT_SHARDS = [
     "GaiaSource_000-000-000.bin",
@@ -170,10 +172,23 @@ def _csv_chunk(rows):
     return out
 
 
+def _iter_dr3_cache(path, chunk=65536):
+    import dr3
+    for rec in dr3.iter_dr3c(path, chunk):
+        yield rec
+
+
+def _iter_dr3_tap(path, chunk=65536):
+    import tap
+    for rec in tap.iter_dr3x(path, chunk):
+        yield rec
+
+
 ADAPTERS = {
     "drive_bin_dr1": iter_bin_records,
     "esa_csv": iter_esa_csv,
-    "dr3_cache": dr3.iter_dr3c,
+    "dr3_cache": _iter_dr3_cache,
+    "dr3_tap": _iter_dr3_tap,
 }
 
 
@@ -193,8 +208,13 @@ def discover_shards(input_dirs, mode, pilot_names, shard_paths=None, suffix=".bi
                 raise FileNotFoundError("pilot shards not in the StarIS Drive folders: " + ", ".join(missing))
             return [found[name] for name in pilot_names]
         else:
-            # for dr3_cache PILOT uses every .dr3c found (cache holds only pilot files); sorted by name
-            return [found[name] for name in sorted(found)]
+            pilot_set = set(pilot_names or [])
+            if not pilot_set:
+                raise ValueError("pilot_names/pilot_dr3 required for PILOT with non-.bin suffix")
+            missing = [name for name in pilot_set if name not in found]
+            if missing:
+                raise FileNotFoundError("pilot dr3 files not found: " + ", ".join(missing))
+            return [found[name] for name in pilot_names]
     if mode != "FULL":
         raise ValueError(f"unknown mode {mode}")
     return [found[name] for name in sorted(found)]
@@ -535,7 +555,12 @@ def run_pipeline(config, progress=print):
     adapter = ADAPTERS[adapter_name]
     mode = config.get("mode", "PILOT")
     write_deep = bool(config.get("write_deep", False))
-    suffix = ".dr3c" if adapter_name == "dr3_cache" else ".bin"
+    if adapter_name == "dr3_tap":
+        suffix = ".dr3x"
+    elif adapter_name == "dr3_cache":
+        suffix = ".dr3c"
+    else:
+        suffix = ".bin"
     rec_size = REC_SIZE.get(adapter_name, 62)
     os.makedirs(output_dir, exist_ok=True)
     manifest = load_manifest(output_dir) or {
@@ -549,10 +574,11 @@ def run_pipeline(config, progress=print):
         "shards": [],
         "aborted": None,
     }
+    pilot_list = config.get("pilot_dr3") if "dr3" in adapter_name else (config.get("pilot_shards") or PILOT_SHARDS)
     paths = discover_shards(
         config.get("input_dirs") or [],
         mode,
-        config.get("pilot_shards") or PILOT_SHARDS,
+        pilot_list,
         config.get("shard_paths"),
         suffix=suffix,
     )
@@ -561,7 +587,11 @@ def run_pipeline(config, progress=print):
 
     q8 = load_q8()
     try:
-        return _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8, rec_size)
+        manifest = _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8, rec_size)
+        if manifest.get("pass") == "done" and config.get("deep_source") == "tap" and write_deep:
+            import dr3
+            manifest = dr3.run_deep(config, progress)
+        return manifest
     except RssExceeded as exc:
         manifest["aborted"] = "rss"
         manifest["rss"] = exc.rss
@@ -866,10 +896,10 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec
         and np.array_equal(hcount, state["hash_count"])
     )
     save_manifest(output_dir, manifest)
-    write_viewer_tiles(output_dir, levels, total_records)
+    write_viewer_tiles(output_dir, levels, total_records, config)
 
 
-def write_viewer_tiles(output_dir, levels, total_records):
+def write_viewer_tiles(output_dir, levels, total_records, config=None):
     """Write packs/tiles.json in the shape the v2 viewer reads.
 
     Pack names are bare filenames (`o0_p0.pack`) so the viewer fetches them
@@ -878,25 +908,28 @@ def write_viewer_tiles(output_dir, levels, total_records):
     """
     viewer_levels = []
     for level in levels:
-        parent = int(level["pack_parent_order"])
+        parent = int(level.get("pack_parent_order", 255))
         viewer_levels.append(
             {
                 "order": int(level["order"]),
                 "host": level.get("host", "pages"),
-                "pack": os.path.basename(level["pack"]),
+                "pack": os.path.basename(level.get("pack", level.get("pack", ""))),
                 "pack_parent_order": -1 if parent == 255 else parent,
                 "pack_id": int(level["pack_id"]),
                 "n": int(level["n"]),
                 "bytes": int(level["bytes"]),
             }
         )
+    r2_base = None
+    if config and (config.get("write_deep") or any(l.get("host") == "r2" for l in levels)):
+        r2_base = config.get("r2_base", "https://stars.graphicoregon.com")
     doc = {
         "version": 2,
         "scheme": "healpix_nested_exclusive",
         "cap": CAP,
         "record": {"format": "q10", "bytes": 10},
         "total_records": int(total_records),
-        "hosts": {"pages": "", "r2": None},
+        "hosts": {"pages": "", "r2": r2_base},
         "levels": viewer_levels,
         "hyg": None,
         "legacy": "data/tiles.json",

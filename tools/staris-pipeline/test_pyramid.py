@@ -47,7 +47,7 @@ def test_dr3_offline():
         os.makedirs(src)
         cache = os.path.join(tmp, "dr3_cache")
         os.makedirs(cache)
-        name = "GaiaSource_synthetic_000000-000001.csv.gz"
+        name = "GaiaSource_000000-000001.csv.gz"
         gz_path = os.path.join(src, name)
         n_rows = 3000
         sid_base = 3 << 59
@@ -97,7 +97,7 @@ solution_id,designation,source_id,ra,dec,parallax,parallax_error,pm,phot_g_mean_
         assert np.sum(np.isfinite(good_t)) == 1  # 10/1 passes; 4/1 and 20/5 are below SNR 5
         base = "file://" + src + "/"
         md5_list = [(name, md5)]
-        fetch = dr3.fetch_dr3(cache, md5_list=md5_list, base=base, limit=None, snr_min=5.0, progress=lambda x: None)
+        fetch = dr3.fetch_dr3(cache, md5_list=md5_list, base=base, limit=None, snr_min=5.0, progress=lambda x: None, allow_file=True)
         with open(os.path.join(cache, "fetch.json")) as f:
             fetch_j = json.load(f)
         assert fetch_j["n"] == n_rows
@@ -108,17 +108,17 @@ solution_id,designation,source_id,ra,dec,parallax,parallax_error,pm,phot_g_mean_
         bad_md5_list = [(name, "deadbeef" * 8)]
         raised = False
         try:
-            dr3.fetch_dr3(cache2, md5_list=bad_md5_list, base=base, limit=1, progress=lambda x: None)
+            dr3.fetch_dr3(cache2, md5_list=bad_md5_list, base=base, limit=1, progress=lambda x: None, allow_file=True)
         except RuntimeError:
             raised = True
         assert raised, "bad md5 should raise RuntimeError"
-        fetch2 = dr3.fetch_dr3(cache, md5_list=md5_list, base=base, limit=None, snr_min=5.0, progress=lambda x: None)
+        fetch2 = dr3.fetch_dr3(cache, md5_list=md5_list, base=base, limit=None, snr_min=5.0, progress=lambda x: None, allow_file=True)
         assert fetch2["files_done"] == 1
         out_dir = os.path.join(tmp, "out")
         os.makedirs(out_dir)
         q8 = pyramid.load_q8()
         manifest = pyramid.run_pipeline(
-            {"output_dir": out_dir, "mode": "PILOT", "adapter": "dr3_cache", "input_dirs": [cache], "rss_cap": 2*1024**3, "write_deep": False},
+            {"output_dir": out_dir, "mode": "PILOT", "adapter": "dr3_cache", "pilot_dr3": [name], "input_dirs": [cache], "rss_cap": 2*1024**3, "write_deep": False},
             progress=lambda s: None
         )
         report = manifest["verify"]
