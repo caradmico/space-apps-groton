@@ -41,6 +41,16 @@ Dec uses `2^24 − 1` codes so −90° and +90° are exact. RA uses `2^24` codes
 
 Round-trip check, one ≤ 1 MB slice from each of the 9 tiles: `python3 public/bin-lod/scripts/test_q8.py`.
 
+## Q10 records (10 bytes, v2 with distance)
+
+Q10 = the 8 Q8 bytes above, unchanged, plus `uint16 dist_q` at bytes 8–9 (LE). `tiles.json` says `"record": {"format": "q10", "bytes": 10}`; the viewer still reads Q8 packs.
+
+- `dist_q = 0`: no distance (parallax missing, ≤ 0, or not finite). The star sits on the radius-100 shell, as in v1.
+- otherwise `log10(d_pc) = -1 + (dist_q - 1) × 6/65534`, so 0.1 pc to 100 kpc (clamped), with `d = 1000 / parallax_mas`.
+- Max relative distance error is half a step: `10^(3/65534) − 1` ≈ 0.0105 % (`DIST_REL_ERR` in `q8.py`).
+
+v2 places Q10 stars at that distance in pc, the same as v1. Check the pilot packs: `cd public/bin-lod && node scripts/test-q10.mjs`.
+
 ## v2 pilot (`?lod=v2`)
 
 `data/v2-pilot/tiles.json` is its own index (version 2). Pack paths inside it are relative to that file. `data/tiles.json` stays where it is. With no `lod` flag the page still loads the v1 tiles, preview, and queue.
