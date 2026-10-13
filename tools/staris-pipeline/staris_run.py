@@ -51,8 +51,15 @@ def main():
     if not args.coarse and not args.deep:
         args.coarse = True
 
+    prefix_file = out / 'prefix.txt'
+    saved = prefix_file.read_text().strip() if prefix_file.exists() else None
     if args.prefix == 'auto':
-        args.prefix = 'v2-dr3-' + datetime.now().strftime('%Y%m%d') + '/'
+        args.prefix = saved or ('v2-dr3-' + datetime.now().strftime('%Y%m%d') + '/')
+    if saved is not None and args.prefix != saved:
+        log('refusing: output dir ' + str(out) + ' belongs to prefix ' + saved + ', not ' + args.prefix)
+        sys.exit(4)
+    if saved is None:
+        prefix_file.write_text(args.prefix + chr(10))
 
     full = args.region is None
     if full and args.overwrite:
@@ -83,6 +90,9 @@ def main():
     pyramid_dir = out / "pyramid"
     region = None
     pilot_order2 = None
+    limit_cells = None
+    coarse_ok = False
+    deep_ok = False
     if args.region:
         order_s, cells_s = args.region.split(":", 1)
         order = int(order_s)
@@ -134,6 +144,7 @@ def main():
             log("COUNT MISMATCH")
             sys.exit(3)
         log("coarse counts match")
+        coarse_ok = True
 
     if args.upload:
         log("uploading coarse packs")
@@ -178,6 +189,10 @@ def main():
         }
         deep_manifest = deep.run_deep(deep_config, progress=log)
         log("deep pass finished with verify " + json.dumps(deep_manifest.get("deep_verify", {})))
+        deep_ok = bool(deep_manifest.get('deep_verify', {}).get('ok'))
+        if not deep_ok:
+            log('DEEP VERIFY FAILED; not uploading tiles.json or publishing')
+            sys.exit(5)
         if args.upload:
             log("re-uploading updated tiles.json")
             tiles_p = (pyramid_dir / "packs") / "tiles.json"
@@ -190,7 +205,7 @@ def main():
             )
             log("deep upload done")
 
-    if args.upload and args.region is None:
+    if args.upload and args.region is None and args.coarse and args.deep and coarse_ok and deep_ok:
         data = {
             'prefix': args.prefix,
             'tiles': args.r2_base.rstrip('/') + '/' + args.prefix.strip('/') + '/packs/tiles.json'
@@ -200,6 +215,8 @@ def main():
             json.dump(data, f)
         upload_file(str(path), 'v2-dr3/current.json', args.bucket, cache_control='public, max-age=60', secrets_dir=args.secrets_dir)
         log('published ' + args.prefix)
+    elif args.upload and args.region is None:
+        log('not publishing current.json: needs --coarse and --deep with both checks passing')
 
     log("staris_run completed successfully")
     sys.exit(0)

@@ -1,12 +1,14 @@
 import sys
 import tempfile
 import shutil
+import json
 from pathlib import Path
 from datetime import datetime
 import functools
 
 sys.path.insert(0, str(Path(__file__).parent))
 import staris_run
+import deep
 import tap
 import pyramid
 from test_tap import FakeTap
@@ -149,11 +151,141 @@ def test_auto_prefix(tmp_path):
     assert len(current_calls) == 0
 
 
+def test_full_run_dry(tmp_path):
+    calls = []
+    def obj_exists(*a, **k): return False
+    orig_anon = getattr(tap, 'ANON_MAX_ROWS', None)
+    try:
+        tap.ANON_MAX_ROWS = 5000
+        code = run_cli(
+            ['--out', str(tmp_path), '--coarse', '--deep', '--upload', '--prefix', 'auto',
+             '--workers', '2', '--secrets-dir', str(tmp_path)],
+            calls,
+            object_exists=obj_exists
+        )
+        assert code == 0
+        import re
+        assert any(c[0] == 'make_sink' and '/deep/' in str(c[1][1]) for c in calls)
+        assert any(c[0] == 'sink' and __import__('re').match(r'o(7|8|9|10|11|12)_p\d+\.pack$', str(c[1])) for c in calls), 'expected deep pack uploads'
+        upload_keys = []
+        for name, arg in calls:
+            if name == 'upload_file':
+                key = arg[1] if len(arg) > 1 else arg[0]
+                upload_keys.append(key)
+        assert any(k.endswith('packs/tiles.json') for k in upload_keys)
+        assert upload_keys[-1] == 'v2-dr3/current.json'
+        assert (tmp_path / 'current.json').exists()
+        prefix = (tmp_path / 'prefix.txt').read_text().strip()
+        data = json.loads((tmp_path / 'current.json').read_text())
+        assert data['prefix'] == prefix
+    finally:
+        if orig_anon is not None:
+            tap.ANON_MAX_ROWS = orig_anon
+        else:
+            delattr(tap, 'ANON_MAX_ROWS')
+
+
+def test_publish_refused_without_deep(tmp_path):
+    calls = []
+    def obj_exists(*a, **k): return False
+    code = run_cli(
+        ['--out', str(tmp_path), '--coarse', '--upload', '--prefix', 'auto',
+         '--workers', '1', '--secrets-dir', str(tmp_path)],
+        calls,
+        object_exists=obj_exists
+    )
+    assert code == 0
+    upload_keys = [c[1][1] if len(c[1]) > 1 else c[1][0] for name, c in calls if name == 'upload_file']
+    assert 'v2-dr3/current.json' not in upload_keys
+
+
+def test_publish_refused_on_deep_verify_fail(tmp_path):
+    calls = []
+    def obj_exists(*a, **k): return False
+    orig_deep_run = deep.run_deep
+    try:
+        deep.run_deep = lambda config, progress=print: {'deep_verify': {'ok': False}}
+        code = run_cli(
+            ['--out', str(tmp_path), '--coarse', '--deep', '--upload', '--prefix', 'auto',
+             '--workers', '1', '--secrets-dir', str(tmp_path)],
+            calls,
+            object_exists=obj_exists
+        )
+        assert code == 5
+        upload_keys = []
+        for name, arg in calls:
+            if name == 'upload_file':
+                key = arg[1] if len(arg) > 1 else arg[0]
+                upload_keys.append(key)
+        assert not any(k.endswith('tiles.json') for k in upload_keys)
+        assert 'v2-dr3/current.json' not in upload_keys
+    finally:
+        deep.run_deep = orig_deep_run
+
+
+def test_count_mismatch_exits_3(tmp_path):
+    calls = []
+    def obj_exists(*a, **k): return False
+    orig_run_pipeline = pyramid.run_pipeline
+    try:
+        def fake_run_pipeline(config, progress=print):
+            real = orig_run_pipeline(config, progress=progress)
+            real['coarse_counts'] = {'0': 1}
+            return real
+        pyramid.run_pipeline = fake_run_pipeline
+        code = run_cli(
+            ['--out', str(tmp_path), '--coarse', '--deep', '--upload', '--prefix', 'auto',
+             '--workers', '1', '--secrets-dir', str(tmp_path)],
+            calls,
+            object_exists=obj_exists
+        )
+        assert code == 3
+        upload_keys = [c[1][1] if len(c[1]) > 1 else c[1][0] for name, c in calls if name == 'upload_file']
+        assert 'v2-dr3/current.json' not in upload_keys
+    finally:
+        pyramid.run_pipeline = orig_run_pipeline
+
+
+def test_prefix_reused_on_resume(tmp_path):
+    calls = []
+    def obj_exists(*a, **k): return False
+    code1 = run_cli(
+        ['--out', str(tmp_path), '--coarse', '--region', '0:4', '--prefix', 'auto',
+         '--workers', '1', '--secrets-dir', str(tmp_path)],
+        calls,
+        object_exists=obj_exists
+    )
+    assert code1 == 0
+    prefix1 = (tmp_path / 'prefix.txt').read_text().strip()
+    assert prefix1.startswith('v2-dr3-')
+    calls.clear()
+    code2 = run_cli(
+        ['--out', str(tmp_path), '--coarse', '--region', '0:4', '--prefix', 'auto',
+         '--workers', '1', '--secrets-dir', str(tmp_path)],
+        calls,
+        object_exists=obj_exists
+    )
+    assert code2 == 0
+    assert (tmp_path / 'prefix.txt').read_text().strip() == prefix1
+    calls.clear()
+    code3 = run_cli(
+        ['--out', str(tmp_path), '--coarse', '--region', '0:4', '--prefix', 'other/',
+         '--workers', '1', '--secrets-dir', str(tmp_path)],
+        calls,
+        object_exists=obj_exists
+    )
+    assert code3 == 4
+
+
 def main():
-    for fn in [test_deep_without_upload_no_r2, test_existing_tiles_without_overwrite_exits_4, test_full_run_refuses_overwrite, test_auto_prefix]:
+    for fn in [test_deep_without_upload_no_r2, test_existing_tiles_without_overwrite_exits_4,
+               test_full_run_refuses_overwrite, test_auto_prefix,
+               test_full_run_dry, test_publish_refused_without_deep,
+               test_publish_refused_on_deep_verify_fail, test_count_mismatch_exits_3,
+               test_prefix_reused_on_resume]:
         with tempfile.TemporaryDirectory() as d:
             fn(Path(d))
-    print('ok 4 tests')
+    print('ok 9 tests')
 
 
 if __name__ == "__main__":
