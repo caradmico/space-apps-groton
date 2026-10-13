@@ -48,3 +48,5 @@ Deep packs are hosted on `staris-gaia-dr3` (default `https://stars.graphicoregon
 
 Use on a persistent Linux box for full coarse + deep + upload:
 
+Full runs must use a fresh versioned prefix (--prefix auto gives v2-dr3-YYYYMMDD/; --overwrite is refused for full runs); --prefix is required; runs refuse (exit 4) if PREFIX/packs/tiles.json exists unless --overwrite (test regions only); --deep without --upload makes no R2 calls; tiles.json uploads last, and only after a successful full run v2-dr3/current.json is updated to point at the new prefix. The viewer can load it with ?lod=v2&index=https://stars.graphicoregon.com/<prefix>/packs/tiles.json; switch the default INDEX_URL in a PR only after the run.
+

@@ -51,6 +51,20 @@ def main():
     if not args.coarse and not args.deep:
         args.coarse = True
 
+    if args.prefix == 'auto':
+        args.prefix = 'v2-dr3-' + datetime.now().strftime('%Y%m%d') + '/'
+
+    full = args.region is None
+    if full and args.overwrite:
+        log('refusing: full runs must use a fresh versioned prefix, not --overwrite')
+        sys.exit(4)
+
+    if args.upload:
+        tiles_key = args.prefix.rstrip('/') + '/packs/tiles.json'
+        if object_exists(tiles_key, bucket=args.bucket, secrets_dir=args.secrets_dir) and not args.overwrite:
+            log('refusing: ' + tiles_key + ' exists; pass --overwrite or use a new prefix')
+            sys.exit(4)
+
     def get_disk_usage_gb(directory):
         total = 0
         for p in Path(directory).rglob("*"):
@@ -122,11 +136,6 @@ def main():
         log("coarse counts match")
 
     if args.upload:
-        tiles_key = args.prefix.rstrip('/') + '/packs/tiles.json'
-        if object_exists(tiles_key, bucket=args.bucket, secrets_dir=args.secrets_dir) and not args.overwrite:
-            log('refusing: ' + tiles_key + ' exists; pass --overwrite')
-            sys.exit(4)
-
         log("uploading coarse packs")
         prefix_packs = args.prefix.rstrip("/") + "/packs/"
         sink_packs = make_sink(args.bucket, prefix_packs, args.secrets_dir)
@@ -157,7 +166,7 @@ def main():
             )
         deep_config = {
             "output_dir": str(pyramid_dir),
-            "deep_sink_factory": make_deep_sink,
+            "deep_sink_factory": make_deep_sink if args.upload else None,
             "deep_delete_after_upload": bool(args.upload),
             "r2_base": args.r2_base.rstrip("/") + "/" + args.prefix.strip("/") + "/deep/",
             "deep_workers": args.workers,
@@ -180,6 +189,17 @@ def main():
                 secrets_dir=args.secrets_dir,
             )
             log("deep upload done")
+
+    if args.upload and args.region is None:
+        data = {
+            'prefix': args.prefix,
+            'tiles': args.r2_base.rstrip('/') + '/' + args.prefix.strip('/') + '/packs/tiles.json'
+        }
+        path = out / 'current.json'
+        with open(path, 'w') as f:
+            json.dump(data, f)
+        upload_file(str(path), 'v2-dr3/current.json', args.bucket, cache_control='public, max-age=60', secrets_dir=args.secrets_dir)
+        log('published ' + args.prefix)
 
     log("staris_run completed successfully")
     sys.exit(0)

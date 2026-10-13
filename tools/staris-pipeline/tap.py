@@ -221,10 +221,12 @@ def run_async(
             if is_http and 400 <= e.code < 500 and e.code != 429:
                 raise
             if is_http and (e.code == 429 or e.code >= 500) or isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
+                if attempt == retries - 1:
+                    break
                 if "retry-after" in getattr(e, "headers", {}):
                     try:
                         sleep = int(e.headers.get("retry-after"))
-                        sleep = min(sleep, 600)
+                        sleep = max(15, min(sleep, 600))
                     except Exception:
                         sleep = min(600, 15 * (2**attempt))
                 else:
