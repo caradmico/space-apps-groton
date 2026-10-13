@@ -66,7 +66,7 @@ class FakeTap:
             # parse TOP, conditions, ORDER
             m_top = re.search(r"TOP\s+(\d+)", sub, re.I)
             top_n = int(m_top.group(1)) if m_top else 1000
-            m_sid = re.findall(r"source_id\s*(?:BETWEEN\s*(\d+)\s*AND\s*(\d+)|>\s*(\d+)\s*AND\s*<=\s*(\d+))", sub, re.I)
+            m_sid = re.findall(r"source_id\s*(?:BETWEEN\s*(\d+)\s*AND\s*(\d+)|>\s*(\d+)\s*AND\s*source_id\s*<=\s*(\d+))", sub, re.I)
             sid_ranges = []
             for between in m_sid:
                 if between[0]:

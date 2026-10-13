@@ -56,12 +56,20 @@ def make_sink(bucket="staris-gaia-dr3", prefix="v2-dr3/deep/", secrets_dir=None)
     cl = client(secrets_dir)
     from botocore.exceptions import ClientError
     def sink(local_path, relative_name):
+        import hashlib
         key = (prefix.rstrip("/") + "/" + str(relative_name).lstrip("/")) if relative_name else prefix
         local_path = str(local_path)
         local_size = Path(local_path).stat().st_size
+
+        md5 = hashlib.md5()
+        with open(local_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
+                md5.update(chunk)
+        md5hex = md5.hexdigest()
+
         try:
             head = cl.head_object(Bucket=bucket, Key=key)
-            if head.get("ContentLength") == local_size:
+            if head.get("Metadata", {}).get("md5") == md5hex:
                 return key
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "")
@@ -74,13 +82,15 @@ def make_sink(bucket="staris-gaia-dr3", prefix="v2-dr3/deep/", secrets_dir=None)
                 pass
             else:
                 raise
+
         cl.upload_file(
             local_path,
             bucket,
             key,
             ExtraArgs={
                 "ContentType": "application/octet-stream",
-                "CacheControl": "public, max-age=31536000, immutable",
+                "CacheControl": "public, max-age=86400",
+                "Metadata": {"md5": md5hex},
             },
         )
         return key

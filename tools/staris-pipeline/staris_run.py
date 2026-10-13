@@ -10,7 +10,7 @@ from pathlib import Path
 import tap
 import pyramid
 import deep
-from r2_upload import make_sink, upload_file
+from r2_upload import make_sink, upload_file, object_exists
 
 
 def main():
@@ -20,7 +20,8 @@ def main():
     parser.add_argument("--deep", action="store_true", help="Run deep pass")
     parser.add_argument("--region", type=str, help="ORDER:CELL[,CELL...]")
     parser.add_argument("--upload", action="store_true", help="Upload to R2")
-    parser.add_argument("--prefix", type=str, default="v2-dr3/")
+    parser.add_argument("--prefix", type=str, required=True)
+    parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--bucket", type=str, default="staris-gaia-dr3")
     parser.add_argument("--disk-cap-gb", type=float, default=20.0)
     parser.add_argument("--min-free-gb", type=float, default=10.0)
@@ -121,6 +122,11 @@ def main():
         log("coarse counts match")
 
     if args.upload:
+        tiles_key = args.prefix.rstrip('/') + '/packs/tiles.json'
+        if object_exists(tiles_key, bucket=args.bucket, secrets_dir=args.secrets_dir) and not args.overwrite:
+            log('refusing: ' + tiles_key + ' exists; pass --overwrite')
+            sys.exit(4)
+
         log("uploading coarse packs")
         prefix_packs = args.prefix.rstrip("/") + "/packs/"
         sink_packs = make_sink(args.bucket, prefix_packs, args.secrets_dir)
@@ -130,14 +136,15 @@ def main():
             sink_packs(str(pack_f), pack_f.name)
             uploaded += 1
         log(f"uploaded {uploaded} coarse packs")
-        tiles_p = packs_d / "tiles.json"
-        upload_file(
-            tiles_p,
-            args.prefix.rstrip("/") + "/packs/tiles.json",
-            args.bucket,
-            cache_control="public, max-age=300",
-            secrets_dir=args.secrets_dir,
-        )
+        if not args.deep:
+            tiles_p = packs_d / "tiles.json"
+            upload_file(
+                tiles_p,
+                args.prefix.rstrip("/") + "/packs/tiles.json",
+                args.bucket,
+                cache_control="public, max-age=300",
+                secrets_dir=args.secrets_dir,
+            )
         log("coarse upload done")
 
     if args.deep:

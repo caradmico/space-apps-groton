@@ -155,8 +155,12 @@ def _urlopen(url: str, data: Optional[bytes] = None, timeout: int = 30) -> bytes
         return resp.read()
 
 
+class TapJobError(TapError):
+    pass
+
+
 def run_async(
-    adql: str, timeout: int = 600, poll: float = 2.0, retries: int = 4
+    adql: str, timeout: int = 600, poll: float = 2.0, retries: int = 6
 ) -> bytes:
     if _opener is None:
         login()
@@ -171,6 +175,7 @@ def run_async(
     post_url = f"{TAP_URL}/async"
     last_error = None
     for attempt in range(retries):
+        job_base = None
         try:
             opener = _opener or urllib.request.build_opener(_TapRedirectHandler())
             req = urllib.request.Request(post_url, data=data, method="POST")
@@ -192,27 +197,51 @@ def run_async(
                 if phase in ("COMPLETED", "ERROR", "ABORTED"):
                     break
                 if time.time() - start_time > timeout:
+                    # (2) timeout: abort then raise
+                    try:
+                        abort_req = urllib.request.Request(
+                            f"{job_base}/phase", data=b"PHASE=ABORT", method="POST"
+                        )
+                        opener.open(abort_req, timeout=10)
+                    except Exception:
+                        pass
                     raise TapError("Job timeout")
             if phase == "COMPLETED":
                 result_url = f"{job_base}/results/result"
                 return _urlopen(result_url, timeout=60)
             if phase == "ERROR":
+                # (3) ERROR phase
                 err_url = f"{job_base}/error"
                 err_text = _urlopen(err_url, timeout=10).decode("utf-8")
-                raise TapError(err_text)
+                raise TapJobError(err_text)
             raise TapError(f"Unexpected phase: {phase}")
         except Exception as e:
             last_error = e
             is_http = isinstance(e, urllib.error.HTTPError)
             if is_http and 400 <= e.code < 500 and e.code != 429:
                 raise
-            if is_http and e.code >= 500 or isinstance(e, urllib.error.URLError):
-                pass
-            elif "ERROR" in str(e).upper():
-                pass
-            else:
-                raise
-            time.sleep(1.5 * (2**attempt))
+            if is_http and (e.code == 429 or e.code >= 500) or isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
+                if "retry-after" in getattr(e, "headers", {}):
+                    try:
+                        sleep = int(e.headers.get("retry-after"))
+                        sleep = min(sleep, 600)
+                    except Exception:
+                        sleep = min(600, 15 * (2**attempt))
+                else:
+                    sleep = min(600, 15 * (2**attempt))
+                time.sleep(sleep)
+                continue
+            raise
+        finally:
+            # (1) always DELETE the job
+            if job_base is not None:
+                try:
+                    del_req = urllib.request.Request(
+                        job_base, method="DELETE"
+                    )
+                    (_opener or urllib.request.build_opener()).open(del_req, timeout=10)
+                except Exception:
+                    pass
     raise TapError(f"Async failed after {retries} attempts: {last_error}") from last_error
 
 
@@ -779,10 +808,6 @@ def iter_deep_unit(
             os.replace(tmp, ppath)
             last_sid = int(arr["source_id"][-1])
             page += 1
-            if len(arr) < page_rows:
-                with open(done_path, "w") as f:
-                    f.write("done")
-                break
             if guard is not None:
                 guard()
     with ThreadPoolExecutor(max_workers=workers) as pool:
