@@ -19,7 +19,7 @@ const REFINE_PX = 256;
 const CACHE_LIMIT = 128;
 const MAX_IN_FLIGHT = 2;
 const COALESCE_BYTES = 64 * 1024;
-const INDEX_URL = "data/v2-pilot/tiles.json";
+const INDEX_URL = (new URLSearchParams(location.search).get('index')?.startsWith('https://stars.graphicoregon.com/') ? new URLSearchParams(location.search).get('index') : "data/v2-pilot/tiles.json");
 const HYG_MAG0 = -27;
 const HYG_STEP = 0.2;
 const HEADER_RANGE = 64 * 1024;
@@ -59,6 +59,8 @@ const state = {
   retries: new Map(),
   absent: new Set(),
   errorCount: 0,
+  r2Base: null,
+  maxOrder: 6,
 };
 
 let active = 0;
@@ -126,9 +128,15 @@ async function readBuffer(res, label) {
   return res.arrayBuffer();
 }
 
-function resourceUrl(relative) {
+function resourceUrl(relative, host) {
   if (!relative) return "";
   if (/^https?:\/\//i.test(relative)) return relative;
+  if (host === "r2") {
+    const base = state.r2Base;
+    if (!base) return "";
+    const withSlash = base.endsWith("/") ? base : base + "/";
+    return withSlash + relative;
+  }
   return new URL(relative, new URL(state.indexUrl, location.href)).href;
 }
 
@@ -246,7 +254,7 @@ function globalCell(level, local) {
 }
 
 function levelFor(order, cell) {
-  const levels = state.index.levels.filter((level) => level.order === order);
+  const levels = state.index.levels.filter((level) => level.order === order && (level.host !== "r2" || state.r2Base));
   if (order <= 4) return levels[0] || null;
   const packId = cell >> 10;
   return levels.find((level) => level.pack_id === packId) || null;
@@ -359,7 +367,7 @@ function selectNear() {
   const leaves = [];
   const walk = (order, cell) => {
     const px = projectedPx(order, cell);
-    if (order < 6 && px > REFINE_PX && hasFiner(order)) {
+    if (order < state.maxOrder && px > REFINE_PX && hasFiner(order)) {
       const kids = children(cell).filter((child) => {
         if (state.absent.has(`${order + 1}:${child}`)) return false;
         return Boolean(levelFor(order + 1, child));
@@ -418,7 +426,7 @@ function holdFull(level, url, bytes) {
 const headerLoads = new Map();
 
 async function ensureHeader(level) {
-  const url = resourceUrl(level.pack);
+  const url = resourceUrl(level.pack, level.host);
   const existing = state.packs.get(url);
   if (existing && existing.pack && !existing.pack.incomplete) return existing;
   const inflight = headerLoads.get(url);
@@ -577,7 +585,10 @@ async function pumpNear() {
   if (loading || state.mode !== "near") return;
   const leaves = selectNear();
   const wanted = wantedDownloads(leaves)
-    .filter((item) => packReady(resourceUrl(item.level.pack)))
+    .filter((item) => {
+      const url = resourceUrl(item.level.pack, item.level.host);
+      return url && packReady(url);
+    })
     .slice(0, 24);
   const jobs = coalesce(wanted).slice(0, MAX_IN_FLIGHT);
   if (!jobs.length) {
@@ -588,7 +599,7 @@ async function pumpNear() {
   try {
     await Promise.all(
       jobs.map(async (group) => {
-        const url = resourceUrl(group[0].level.pack);
+        const url = resourceUrl(group[0].level.pack, group[0].level.host);
         try {
           await loadCells(group);
           state.retries.delete(url);
@@ -878,14 +889,48 @@ function updateLabels() {
   }
   visible.sort((a, b) => a.mag - b.mag);
   const chosen = [];
-  const sol = visible.find((item) => item.name === "Sol");
+  const placed = [];
+  let sol = visible.find((item) => item.name === "Sol");
+  if (sol) {
+    chosen.push(sol);
+    placed.push(sol);
+  } else {
+    sol = { name: "Sol", mag: -26.7, x: 12, y: 18, onScreen: true };
+    chosen.push(sol);
+    placed.push(sol);
+  }
   for (const item of visible) {
     if (chosen.length >= 40) break;
     if (item.name === "Sol") continue;
+    let px = item.x;
+    let py = item.y;
+    let overlaps = false;
+    for (const p of placed) {
+      if (Math.abs(p.x - px) < 60 && Math.abs(p.y - py) < 14) {
+        overlaps = true;
+        break;
+      }
+    }
+    if (overlaps) {
+      if (item.name.includes("Proxima")) {
+        py += 14;
+        overlaps = false;
+        for (const p of placed) {
+          if (Math.abs(p.x - px) < 60 && Math.abs(p.y - py) < 14) {
+            overlaps = true;
+            break;
+          }
+        }
+        if (overlaps) continue;
+      } else {
+        continue;
+      }
+    }
+    item.x = px;
+    item.y = py;
     chosen.push(item);
+    placed.push(item);
   }
-  if (sol) chosen.unshift(sol);
-  else chosen.unshift({ name: "Sol", mag: -26.7, x: 12, y: 18, onScreen: true });
   state.labels = chosen.slice(0, 40).map((item) => item.name);
   labelLayer.textContent = "";
   for (const item of chosen.slice(0, 40)) {
@@ -1106,6 +1151,18 @@ export async function startV2() {
   const indexRes = await indexPromise;
   state.index = await indexRes.json();
 
+  const urlParams = new URLSearchParams(location.search);
+  let r2Param = urlParams.get("r2");
+  if (r2Param && !/^https:\/\//i.test(r2Param)) r2Param = null;
+  state.r2Base = r2Param || (state.index.hosts && state.index.hosts.r2 && /^https:\/\//i.test(state.index.hosts.r2) ? state.index.hosts.r2 : null);
+  let computedMax = 6;
+  for (const level of state.index.levels || []) {
+    if (level.host !== "r2" || state.r2Base) {
+      computedMax = Math.max(computedMax, level.order || 0);
+    }
+  }
+  state.maxOrder = Math.min(computedMax, 12);
+
   THREE = await import("three");
   ({ OrbitControls } = await import("three/addons/controls/OrbitControls.js"));
   scratch = new THREE.Vector3();
@@ -1154,6 +1211,7 @@ export async function startV2() {
     drawFar();
     const hygPos = new Float32Array(hyg.n * 3);
     const hygCol = new Float32Array(hyg.n * 3);
+    const hygSize = new Float32Array(hyg.n);
     for (let i = 0; i < hyg.n; i++) {
       const star = hyg.stars[i];
       hygPos[i * 3] = star.x;
@@ -1163,14 +1221,39 @@ export async function startV2() {
       hygCol[i * 3] = shade;
       hygCol[i * 3 + 1] = shade * 0.95;
       hygCol[i * 3 + 2] = 1;
+      hygSize[i] = (star.name === "Sol") ? 1.6 : 1.0;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(hygPos, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(hygCol, 3));
-    hygPoints = new THREE.Points(
-      geo,
-      new THREE.PointsMaterial({ size: 0.15, vertexColors: true, transparent: true, opacity: 0, depthWrite: false })
-    );
+    geo.setAttribute("aSize", new THREE.BufferAttribute(hygSize, 1));
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexColors: true,
+      uniforms: { uAlpha: { value: 0 } },
+      vertexShader: `
+        attribute float aSize;
+        varying vec3 vColor;
+        void main() {
+          vColor = color;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = clamp(aSize * (64.0 / max(-mvPosition.z, 0.35)), 1.5, 16.0);
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: `
+        uniform float uAlpha;
+        varying vec3 vColor;
+        void main() {
+          vec2 uv = gl_PointCoord - vec2(0.5);
+          if (length(uv) > 0.5) discard;
+          gl_FragColor = vec4(vColor, uAlpha);
+        }
+      `,
+    });
+    hygPoints = new THREE.Points(geo, material);
     hygPoints.frustumCulled = false;
     scene.add(hygPoints);
   }
