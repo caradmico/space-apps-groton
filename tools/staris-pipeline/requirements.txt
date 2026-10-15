@@ -1,0 +1,3 @@
+# pyarrow only needed for --source hats
+numpy
+pyarrow>=14

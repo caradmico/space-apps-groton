@@ -1,6 +1,6 @@
 # Gaia LOD pyramid (Colab + Box CLI)
 
-Builds the StarIS v2 HEALPix packs from Gaia DR3 via TAP (coarse orders 0-6) or legacy DR1. Plain NumPy. One shard at a time. No compiler and no GitHub token. Deep orders 7-12 are written to R2.
+Builds the StarIS v2 HEALPix packs from the LSDB HATS copy of Gaia DR3 (default), via TAP, or legacy DR1. Plain NumPy. One shard at a time. No compiler and no GitHub token. Deep orders 7-12 are written to R2.
 
 `gaia_lod_pyramid.ipynb` calls `pyramid.py`. Order-k nested cell = `source_id >> (59 - 2k)`. The Q8 encoder is `public/bin-lod/scripts/q8.py`.
 
@@ -21,9 +21,13 @@ This work has made use of data from the European Space Agency (ESA) mission Gaia
 
 Orders 0–4 are one pack each. Order 5 is 12 packs (one per base cell). Order 6 is 48 packs (one per order-1 cell). Header: `Q8PK`, order, parent order, `n_cells`, then `n_cells` × `{u32 local cell, u32 start, u32 count}`, then the 8-byte records. Deep packs land on R2.
 
+New runs write G1BK packs by default (`--pack-format g1b`; `q10` keeps Q8PK). G1BK: `G1BK`, u8 version (1), u8 order, u8 parent order, u8 0, u32 `n_cells`, then `n_cells` × `{u32 local, u32 start, u32 count, u32 byte_offset, u32 byte_len}`, then one zlib stream per cell of that cell's Q10 records split into 10 byte planes. It decodes to the exact Q10 bytes, so the Q10 error limits are unchanged, and the viewer can still range-read one cell. Codec: `public/bin-lod/scripts/g1b.py` and `g1b.js`; `q10_to_g1b.py` converts an existing pack folder. tiles.json `record` gains `"pack": "g1b"`. The viewer reads both formats by magic.
+
 ## Input
 
-**TAP mode (default, recommended):** `SOURCE="dr3_tap"` in notebook or `--coarse` in CLI. Uses `tap.fetch_coarse(cache_dir, workers=4, region=(order,cells)|None, ...)` to produce `.dr3x` files (36 B records). `pyramid` adapter `"dr3_tap"` reads them and derives colour class from `bp_rp`. Coarse queries target orders 0-6 (≤67.1 M rows, ~1,820 async jobs, ~7 GB CSV transfer → 2.4 GB `.dr3x`). Pilot uses `pilot_dr3` config key = exact list of input `.dr3x` basenames. Authenticated TAP (optional `GAIA_USER`/`GAIA_PASSWORD`) allows unlimited rows.
+**HATS mode (default):** `--source hats` in the CLI. `hats.fetch_hats` reads the LSDB HATS copy of Gaia DR3 (https://data.lsdb.io/hats/gaia_dr3/gaia/, 2,016 parquet partitions, 1,812,731,847 rows). It range-reads only source_id, ra, dec, parallax, parallax_error, phot_g_mean_mag and bp_rp (78.8 GB of the 764.7 GB catalogue), drops duplicate source_ids, keeps parallax only at SNR >= 5, and writes source_id-sorted `.hatsx` files (36-byte DR3X records) per order-2 cell into `OUT/hats_cache`. The pyramid adapter `hats` reads them. Use `--partitions first:N` or `--partitions 2/0,2/1` for a test. `pip install -r requirements.txt`.
+
+**TAP mode (`--source tap`):** `SOURCE="dr3_tap"` in notebook or `--coarse` in CLI. Uses `tap.fetch_coarse(cache_dir, workers=4, region=(order,cells)|None, ...)` to produce `.dr3x` files (36 B records). `pyramid` adapter `"dr3_tap"` reads them and derives colour class from `bp_rp`. Coarse queries target orders 0-6 (≤67.1 M rows, ~1,820 async jobs, ~7 GB CSV transfer → 2.4 GB `.dr3x`). Pilot uses `pilot_dr3` config key = exact list of input `.dr3x` basenames. Authenticated TAP (optional `GAIA_USER`/`GAIA_PASSWORD`) allows unlimited rows.
 
 **Legacy DR3 CDN fallback:** `dr3.fetch_dr3` (returns `"names"`). Produces cache for `dr3_tap` adapter.
 
@@ -45,6 +49,8 @@ Orders 0–4 are one pack each. Order 5 is 12 packs (one per base cell). Order 6
 Deep packs are hosted on `staris-gaia-dr3` (default `https://stars.graphicoregon.com/v2-dr3/deep/`). Temporary fallback: `https://pub-dcca7c4a73bc4891abfc485697bc1072.r2.dev` (rate-limited; viewer supports `?r2=` param). `r2_upload.py` provides `make_sink(bucket, prefix, secrets_dir=None)` (returns callable `sink(path, name)`) and `upload_file`. Credentials from env, secrets dir, or Colab `userdata` (`R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ACCOUNT_ID`), read fresh each call, never printed. `deep.py:run_deep(config)` handles per-order-2 units and upload-then-delete.
 
 ## Box CLI
+
+Default source is HATS (`--source hats`, flags `--partitions`, `--hats-workers`, `--range-workers`, `--pack-format`). TAP stays available with `--source tap` (`--region`, `--estimate`, deep via `deep.py`). With HATS, `--deep` makes the same pyramid pass write orders 7-12.
 
 Use on a persistent Linux box for full coarse + deep + upload:
 

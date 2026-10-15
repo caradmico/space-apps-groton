@@ -42,6 +42,7 @@ REC_SIZE = {
     "esa_csv": None,
     "dr3_cache": 32,
     "dr3_tap": 36,
+    "hats": 36,
 }
 PILOT_SHARDS = [
     "GaiaSource_000-000-000.bin",
@@ -109,6 +110,12 @@ def load_q8():
     import q8
 
     return q8
+
+
+def load_g1b():
+    load_q8()
+    import g1b
+    return g1b
 
 
 def check_rss(cap, checkpoint):
@@ -184,11 +191,17 @@ def _iter_dr3_tap(path, chunk=65536):
         yield rec
 
 
+def _iter_hats(path, chunk=65536):
+    import hats
+    yield from hats.iter_hats(path, chunk)
+
+
 ADAPTERS = {
     "drive_bin_dr1": iter_bin_records,
     "esa_csv": iter_esa_csv,
     "dr3_cache": _iter_dr3_cache,
     "dr3_tap": _iter_dr3_tap,
+    "hats": _iter_hats,
 }
 
 
@@ -494,10 +507,21 @@ def _pack_key(order, cell):
     return parent, parent_order, int(cell & 1023)
 
 
-def write_pack(path, order, parent_order, cells):
+def write_pack(path, order, parent_order, cells, fmt="q10"):
     """cells: list of (local, records uint8 (n, 8)) sorted by local cell."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
+    if fmt == "g1b":
+        g1b = load_g1b()
+        cells = sorted(cells, key=lambda item: item[0])
+        blob = g1b.pack_bytes(order, parent_order, cells)
+        with open(tmp, "wb") as handle:
+            handle.write(blob)
+        os.replace(tmp, path)
+        nrec = sum(int(rec.shape[0]) for _local, rec in cells)
+        return nrec, os.path.getsize(path)
+    if fmt != "q10":
+        raise ValueError(f"unknown pack format {fmt}")
     cells = sorted(cells, key=lambda item: item[0])
     n_cells = len(cells)
     blob = b"".join(rec.tobytes() for _local, rec in cells)
@@ -518,15 +542,21 @@ def write_pack(path, order, parent_order, cells):
 
 def read_pack(path):
     with open(path, "rb") as handle:
-        magic = handle.read(4)
-        if magic != b"Q8PK":
-            raise ValueError(f"{path} magic {magic!r}")
-        order, parent, _reserved, n_cells = struct.unpack("<BBHI", handle.read(8))
-        table = []
-        for _ in range(n_cells):
-            local, start, count = struct.unpack("<III", handle.read(12))
-            table.append((local, start, count))
-        payload = np.frombuffer(handle.read(), dtype=np.uint8).copy()
+        buf = handle.read()
+    if buf.startswith(b"G1BK"):
+        g1b = load_g1b()
+        return g1b.read_pack_bytes(buf)
+    if not buf.startswith(b"Q8PK"):
+        raise ValueError(f"{path} magic {buf[:4]!r}")
+    magic = buf[:4]
+    order, parent, _reserved, n_cells = struct.unpack("<BBHI", buf[4:12])
+    table = []
+    off = 12
+    for _ in range(n_cells):
+        local, start, count = struct.unpack("<III", buf[off:off+12])
+        table.append((local, start, count))
+        off += 12
+    payload = np.frombuffer(buf[off:], dtype=np.uint8).copy()
     return {"order": order, "parent_order": parent, "cells": table, "payload": payload}
 
 
@@ -559,8 +589,8 @@ def run_pipeline(config, progress=print):
     adapter = ADAPTERS[adapter_name]
     mode = config.get("mode", "PILOT")
     write_deep = bool(config.get("write_deep", False))
-    if adapter_name == "dr3_tap":
-        suffix = ".dr3x"
+    if adapter_name == "dr3_tap" or adapter_name == "hats":
+        suffix = ".hatsx" if adapter_name == "hats" else ".dr3x"
     elif adapter_name == "dr3_cache":
         suffix = ".dr3c"
     else:
@@ -578,7 +608,7 @@ def run_pipeline(config, progress=print):
         "shards": [],
         "aborted": None,
     }
-    pilot_list = config.get("pilot_dr3") if "dr3" in adapter_name else (config.get("pilot_shards") or PILOT_SHARDS)
+    pilot_list = config.get("pilot_dr3") if "dr3" in adapter_name or adapter_name == "hats" else (config.get("pilot_shards") or PILOT_SHARDS)
     paths = discover_shards(
         config.get("input_dirs") or [],
         mode,
@@ -738,6 +768,8 @@ def _read_parts(part_dir):
 def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec_size=62):
     output_dir = config["output_dir"]
     write_deep = bool(config.get("write_deep", False))
+    fmt = config.get("pack_format", "q10")
+    manifest["pack_format"] = fmt
     part_dir = os.path.join(output_dir, "parts")
     os.makedirs(part_dir, exist_ok=True)
     rng = np.random.default_rng(7)
@@ -868,7 +900,7 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec
         else:
             parent = order - 5
         name = f"o{order}_p{pack_id}.pack"
-        nrec, nbytes = write_pack(os.path.join(pack_dir, name), order, parent, merged)
+        nrec, nbytes = write_pack(os.path.join(pack_dir, name), order, parent, merged, fmt)
         total_records += nrec
         total_bytes += nbytes
         levels.append(
@@ -910,6 +942,14 @@ def write_viewer_tiles(output_dir, levels, total_records, config=None):
     next to this file. Upload the packs/ folder unchanged as data/v2-pilot.
     The manifest stays at the output root and still stores the bare filename.
     """
+    if config and "pack_format" in config:
+        pack_format = config["pack_format"]
+    else:
+        m = load_manifest(output_dir)
+        pack_format = m.get("pack_format", "q10") if m else "q10"
+    record = {"format": "q10", "bytes": 10}
+    if pack_format == "g1b":
+        record["pack"] = "g1b"
     viewer_levels = []
     for level in levels:
         parent = int(level.get("pack_parent_order", 255))
@@ -931,7 +971,7 @@ def write_viewer_tiles(output_dir, levels, total_records, config=None):
         "version": 2,
         "scheme": "healpix_nested_exclusive",
         "cap": CAP,
-        "record": {"format": "q10", "bytes": 10},
+        "record": record,
         "total_records": int(total_records),
         "hosts": {"pages": "", "r2": r2_base},
         "levels": viewer_levels,

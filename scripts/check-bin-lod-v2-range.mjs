@@ -13,6 +13,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { decodeQ8, Q8_BYTES } from "../public/bin-lod/scripts/q8.js";
+import { inflateCell } from "../public/bin-lod/scripts/g1b.js";
 
 let REC_BYTES = Q8_BYTES; // set from tiles.json record.bytes (8 = Q8, 10 = Q10; first 8 bytes identical)
 
@@ -178,19 +179,30 @@ async function evaluate(send, expression) {
 function parsePack(buf) {
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const magic = String.fromCharCode(buf[0], buf[1], buf[2], buf[3]);
-  if (magic !== "Q8PK") throw new Error(`pack magic ${magic}`);
-  const nCells = view.getUint32(8, true);
-  const recordsAt = 12 + nCells * 12;
+  if (magic !== "Q8PK" && magic !== "G1BK") throw new Error(`pack magic ${magic}`);
+  let nCells, recordsAt;
+  if (magic === "Q8PK") {
+    nCells = view.getUint32(8, true);
+    recordsAt = 12 + nCells * 12;
+  } else {
+    nCells = view.getUint32(8, true);
+    recordsAt = 12 + nCells * 20;
+  }
   const cells = [];
   for (let i = 0; i < nCells; i++) {
-    const offset = 12 + i * 12;
-    cells.push({
+    const offset = (magic === "Q8PK" ? 12 : 12) + i * (magic === "Q8PK" ? 12 : 20);
+    const cell = {
       local: view.getUint32(offset, true),
       start: view.getUint32(offset + 4, true),
       count: view.getUint32(offset + 8, true),
-    });
+    };
+    if (magic === "G1BK") {
+      cell.byteOffset = view.getUint32(offset + 12, true);
+      cell.byteLen = view.getUint32(offset + 16, true);
+    }
+    cells.push(cell);
   }
-  return { recordsAt, cells };
+  return { recordsAt, cells, g1b: magic === "G1BK" };
 }
 
 function decodeRecords(bytes) {
@@ -310,7 +322,9 @@ async function main() {
       const local = near.order <= 4 ? near.cell : near.cell & 1023;
       const meta = pack.cells.find((item) => item.local === local);
       if (!meta || meta.count !== near.count) throw new Error(`cell ${near.order}:${near.cell} count ${near.count} != ${meta && meta.count}`);
-      const slice = buf.subarray(pack.recordsAt + meta.start * REC_BYTES, pack.recordsAt + (meta.start + meta.count) * REC_BYTES);
+      const slice = pack.g1b
+        ? Buffer.from(await inflateCell(buf.subarray(pack.recordsAt + meta.byteOffset, pack.recordsAt + meta.byteOffset + meta.byteLen), meta.count))
+        : buf.subarray(pack.recordsAt + meta.start * REC_BYTES, pack.recordsAt + (meta.start + meta.count) * REC_BYTES);
       const fromRange = decodeRecords(Buffer.from(near.hex, "hex"));
       const fromFile = decodeRecords(slice);
       if (!sameStars(fromRange, fromFile)) throw new Error(`records differ ${near.order}:${near.cell}`);
