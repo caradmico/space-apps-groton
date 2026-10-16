@@ -220,9 +220,10 @@ def read_partition(url: str, workers: int = 8) -> Tuple[np.ndarray, Dict[str, An
 
 
 def clean(arr: np.ndarray) -> Tuple[np.ndarray, int]:
+    """Winner is the smallest (mag, ra, dec, parallax, bp_rp)."""
     if len(arr) == 0:
         return arr, 0
-    order = np.argsort(arr["source_id"], kind="stable")
+    order = np.lexsort((arr["bp_rp"], arr["parallax"], arr["dec"], arr["ra"], arr["mag"], arr["source_id"]))
     sorted_arr = arr[order]
     diff = np.diff(sorted_arr["source_id"])
     mask = np.concatenate(([True], diff != 0))
@@ -301,6 +302,7 @@ def fetch_hats(
             if manifest.get("finished"):
                 return manifest
             spill_dir = os.path.join(cache_dir, "spill")
+            os.makedirs(spill_dir, exist_ok=True)
             for name, sz in manifest.get("spill_sizes", {}).items():
                 spill = os.path.join(spill_dir, name)
                 if os.path.exists(spill):

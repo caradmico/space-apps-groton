@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--prefix", type=str, required=True)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--bucket", type=str, default="staris-gaia-dr3")
-    parser.add_argument("--disk-cap-gb", type=float, default=20.0)
+    parser.add_argument("--disk-cap-gb", type=float, default=30.0, help="stop if the output folder grows past this (GB); a streamed coarse HATS run is estimated at about 12 GB peak")
     parser.add_argument("--min-free-gb", type=float, default=10.0)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--secrets-dir", type=str, default="/workspace/box-secrets")
@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--hats-workers", type=int, default=4)
     parser.add_argument("--range-workers", type=int, default=8)
     parser.add_argument("--pack-format", choices=["g1b", "q10"], default="g1b")
+    parser.add_argument("--hats-base", type=str, default=None, help="HATS catalogue base URL (default: hats.HATS_BASE)")
     args = parser.parse_args()
 
     out = args.out
@@ -58,6 +59,10 @@ def main():
 
     if args.source == "hats" and args.region is not None:
         log("regions are a TAP concept; for HATS use --partitions")
+        sys.exit(4)
+
+    if args.source == "hats" and args.upload:
+        log("refusing: --upload is disabled for --source hats until the HATS deep pass and the R2 upload are tested end to end; run without --upload and upload separately")
         sys.exit(4)
 
     if not args.coarse and not args.deep:
@@ -124,28 +129,18 @@ def main():
     if args.coarse:
         if args.source == "hats":
             import hats
+            import hats_stream
             if args.partitions and args.partitions.startswith("first:"):
                 n = int(args.partitions.split(":", 1)[1])
-                parts = list(hats.partition_list())[:n]
+                parts = list(hats.partition_list(args.hats_base or hats.HATS_BASE))[:n]
             elif args.partitions:
                 parts = [(int(o), int(p)) for o, p in (x.split("/") for x in args.partitions.split(","))]
             else:
                 parts = None
-            log("starting HATS fetch")
-            hm = hats.fetch_hats(
-                str(out / "hats_cache"),
-                partitions=parts,
-                workers=args.hats_workers,
-                range_workers=args.range_workers,
-                guard=guard,
-                progress=log,
-            )
             config = {
                 "output_dir": str(pyramid_dir),
                 "adapter": "hats",
                 "mode": "PILOT" if args.partitions else "FULL",
-                "pilot_dr3": hm["files"],
-                "input_dirs": [str(out / "hats_cache")],
                 "r2_base": args.r2_base,
                 "write_deep": bool(args.deep),
                 "deep_source": "hats",
@@ -154,6 +149,26 @@ def main():
                 "guard": guard,
                 "region": None,
             }
+            log("starting HATS stream")
+            hm, pyr_manifest = hats_stream.run(str(out), partitions=parts, config=config, base=args.hats_base or hats.HATS_BASE, workers=args.hats_workers, range_workers=args.range_workers, guard=guard, progress=log)
+            v = pyr_manifest.get("verify", {})
+            rows_in = sum(int(s.get("n", 0)) for s in pyr_manifest.get("shards", []))
+            deep_rows = sum(int(x) for x in pyr_manifest.get('deep_counts', {}).values())
+            log(f"counts: hats={hm['rows_out']} pyramid_input={rows_in} coarse={v.get('pass2_coarse',0)} deep={deep_rows} skipped_nonfinite={v.get('skipped_nonfinite',0)} identity_ok={v.get('identity_ok',False)}")
+            if rows_in != hm["rows_out"] or not v.get("identity_ok"):
+                log("COUNT MISMATCH")
+                sys.exit(3)
+            log("coarse counts match")
+            coarse_ok = True
+            if args.deep:
+                levels = pyr_manifest.get("levels", [])
+                deep_written = sum(int(l["n"]) for l in levels if int(l["order"]) >= 7)
+                coarse_written = sum(int(l["n"]) for l in levels if int(l["order"]) < 7)
+                deep_ok = (deep_written == deep_rows and coarse_written == int(v.get("pass2_coarse", -1)) and bool(pyr_manifest.get("write_deep")))
+                log(f"deep check: written={deep_written} counted={deep_rows} coarse_written={coarse_written} ok={deep_ok}")
+                if not deep_ok:
+                    log("DEEP VERIFY FAILED")
+                    sys.exit(5)
         else:
             log("starting coarse TAP fetch")
             tap_manifest = tap.fetch_coarse(
@@ -183,21 +198,8 @@ def main():
                 "tap_cache": str(tap_cache),
                 "pack_format": args.pack_format,
             }
-        log("starting pyramid coarse")
-        pyr_manifest = pyramid.run_pipeline(config, progress=log)
-        if args.source == "hats":
-            v = pyr_manifest.get("verify", {})
-            rows_in = sum(int(s.get("n", 0)) for s in pyr_manifest.get("shards", []))
-            deep_rows = sum(int(x) for x in pyr_manifest.get('deep_counts', {}).values())
-            log(f"counts: hats={hm['rows_out']} pyramid_input={rows_in} coarse={v.get('pass2_coarse',0)} deep={deep_rows} skipped_nonfinite={v.get('skipped_nonfinite',0)} identity_ok={v.get('identity_ok',False)}")
-            if rows_in != hm["rows_out"] or not v.get("identity_ok"):
-                log("COUNT MISMATCH")
-                sys.exit(3)
-            log("coarse counts match")
-            coarse_ok = True
-            if args.deep:
-                deep_ok = True
-        else:
+            log("starting pyramid coarse")
+            pyr_manifest = pyramid.run_pipeline(config, progress=log)
             tap_rows = tap_manifest.get("rows", 0)
             pyr_coarse = sum(int(v) for v in pyr_manifest.get("coarse_counts", {}).values())
             log(f"counts: tap={tap_rows} pyramid_coarse={pyr_coarse}")
@@ -266,7 +268,7 @@ def main():
             )
             log("deep upload done")
 
-    if args.upload and args.region is None and args.coarse and args.deep and coarse_ok and deep_ok:
+    if args.upload and args.region is None and args.coarse and args.deep and coarse_ok and deep_ok and not args.partitions:
         data = {
             'prefix': args.prefix,
             'tiles': args.r2_base.rstrip('/') + '/' + args.prefix.strip('/') + '/packs/tiles.json'
@@ -276,6 +278,8 @@ def main():
             json.dump(data, f)
         upload_file(str(path), 'v2-dr3/current.json', args.bucket, cache_control='public, max-age=60', secrets_dir=args.secrets_dir)
         log('published ' + args.prefix)
+    elif args.upload and args.partitions:
+        log("not publishing current.json: --partitions is a test run")
     elif args.upload and args.region is None:
         log('not publishing current.json: needs --coarse and --deep with both checks passing')
 

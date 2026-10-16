@@ -25,7 +25,7 @@ New runs write G1BK packs by default (`--pack-format g1b`; `q10` keeps Q8PK). G1
 
 ## Input
 
-**HATS mode (default):** `--source hats` in the CLI. `hats.fetch_hats` reads the LSDB HATS copy of Gaia DR3 (https://data.lsdb.io/hats/gaia_dr3/gaia/, 2,016 parquet partitions, 1,812,731,847 rows). It range-reads only source_id, ra, dec, parallax, parallax_error, phot_g_mean_mag and bp_rp (78.8 GB of the 764.7 GB catalogue), drops duplicate source_ids, keeps parallax only at SNR >= 5, and writes source_id-sorted `.hatsx` files (36-byte DR3X records) per order-2 cell into `OUT/hats_cache`. The pyramid adapter `hats` reads them. Use `--partitions first:N` or `--partitions 2/0,2/1` for a test. `pip install -r requirements.txt`.
+**HATS mode (default):** `--source hats` in the CLI. `hats_stream.py` streams the LSDB HATS copy of Gaia DR3 (https://data.lsdb.io/hats/gaia_dr3/gaia/, 2,016 parquet partitions, 1,812,731,847 rows) in two network passes. Pass 1 (`scan`) reads every partition once, keeps the brightest `M = 1024 * 7` candidates per order-6 cell in `OUT/hats_stream/cand/`, and saves stragglers (source_id outside the partition's order-2 cells) in `OUT/hats_stream/strag/`. Pass 2 re-reads partitions one order-2 cell at a time in ascending order, writes that cell's `.hatsx` file (per order-4 sub-cell, RAM bounded), feeds it to the pyramid write pass and deletes it before the next cell. The full raw cache is never on disk at once. `hats.clean` keeps the row with the smallest `(mag, ra, dec, parallax, bp_rp)` for duplicate source_ids. Pass 1 resumes per 64 partitions; pass 2 restarts from the first order-2 cell if interrupted (it re-downloads). Use `--partitions first:N` or `--partitions 2/0,2/1` for a test. `pip install -r requirements.txt` installs numpy, pyarrow, pytest and pandas. `--hats-base URL` points at another HATS copy (tests use a local server).
 
 **TAP mode (`--source tap`):** `SOURCE="dr3_tap"` in notebook or `--coarse` in CLI. Uses `tap.fetch_coarse(cache_dir, workers=4, region=(order,cells)|None, ...)` to produce `.dr3x` files (36 B records). `pyramid` adapter `"dr3_tap"` reads them and derives colour class from `bp_rp`. Coarse queries target orders 0-6 (≤67.1 M rows, ~1,820 async jobs, ~7 GB CSV transfer → 2.4 GB `.dr3x`). Pilot uses `pilot_dr3` config key = exact list of input `.dr3x` basenames. Authenticated TAP (optional `GAIA_USER`/`GAIA_PASSWORD`) allows unlimited rows.
 
@@ -52,7 +52,23 @@ Deep packs are hosted on `staris-gaia-dr3` (default `https://stars.graphicoregon
 
 Default source is HATS (`--source hats`, flags `--partitions`, `--hats-workers`, `--range-workers`, `--pack-format`). TAP stays available with `--source tap` (`--region`, `--estimate`, deep via `deep.py`). With HATS, `--deep` makes the same pyramid pass write orders 7-12.
 
-Use on a persistent Linux box for full coarse + deep + upload:
+`--disk-cap-gb` now defaults to 30 (was 20). `--min-free-gb` stays 10. `--source hats --upload` is refused (exit 4) before any download. `--partitions` runs never publish `v2-dr3/current.json`. With `--deep`, the HATS run now checks that the deep pack records equal the deep counts and that coarse pack records equal the pass-2 coarse count; a mismatch exits 5.
 
-Full runs must use a fresh versioned prefix (--prefix auto gives v2-dr3-YYYYMMDD/; --overwrite is refused for full runs); --prefix is required; runs refuse (exit 4) if PREFIX/packs/tiles.json exists unless --overwrite (test regions only); --deep without --upload makes no R2 calls; tiles.json uploads last, and only after a successful full run v2-dr3/current.json is updated to point at the new prefix. The viewer can load it with ?lod=v2&index=https://stars.graphicoregon.com/<prefix>/packs/tiles.json; switch the default INDEX_URL in a PR only after the run.
+Use on a persistent Linux box for full coarse + deep. Full runs must use a fresh versioned prefix (--prefix auto gives v2-dr3-YYYYMMDD/; --overwrite is refused for full runs); --prefix is required; runs refuse (exit 4) if PREFIX/packs/tiles.json exists unless --overwrite (test regions only); --deep without --upload makes no R2 calls; tiles.json uploads last. With `--source tap`, only after a successful full run (no `--region`) is v2-dr3/current.json updated to point at the new prefix. The viewer can load it with ?lod=v2&index=https://stars.graphicoregon.com/<prefix>/packs/tiles.json; switch the default INDEX_URL in a PR only after the run.
 
+## 2-partition test
+
+`--partitions 2/0,2/1 --coarse`: output packs and tiles.json are byte-identical to the earlier non-streamed run (7 packs, 688 cells, 700,429 coarse records). Peak size of the output folder was 89.5 MB (old code: 101.3 MB on the same test). Over two runs: wall time 82-86 s, peak RSS (VmHWM) 941,636-956,612 kB.
+
+## Full-run estimates
+
+Peak output folder about 12.5 GB = largest order-2 cell (168.7 M rows × 36 B = 6.1 GB) + candidate files at most 4.9 GB (12 bases × 4096 cells × 7168 × 14 B) + 0.4 GB merge temp + about 1.1 GB coarse part files and packs. Old code needed about 65 GB for the cache alone, against about 51 GB free on the box.
+
+Pass 1 about 0.9-1.3 h and pass 2 downloads about 1.0-1.5 h (89 GB at the 4.8-7.0 MB/s per stream measured, 4 streams), plus the pyramid write pass at the measured 20 microseconds per row, about 10.2 h. Total about 12-13 h.
+
+## Known gaps
+
+- HATS `--deep` has only been run on small test data (the 2-partition test and the unit tests). A full HATS `--deep` run is untested and is estimated to need about 17.5 GB of deep part files plus about 12 GB of deep packs on top of the coarse peak, so it would hit the 30 GB `--disk-cap-gb` default; that guard stop is intended until it is tested.
+- R2 upload is not tested end to end for HATS. That is why `--source hats --upload` is refused. Upload the `packs/` folder separately after checking it, or use the TAP path.
+- The full streamed coarse run has not been done. The peak disk and time figures above are estimates scaled from the 2-partition test and the HATS `_metadata` row counts. The largest order-2 cell (168.7 M rows) has not been exercised, so its RAM use in pass 2 is unmeasured.
+- Pass 2 does not resume mid-pass; an interruption repeats its downloads.

@@ -16,6 +16,7 @@ MAGIC = b"G1BK"
 VERSION = 1
 Q10_BYTES = 10
 Q8PK_MAGIC = b"Q8PK"
+MAX_CELLS = 99_999
 
 
 def encode_cell(q10: np.ndarray) -> bytes:
@@ -54,7 +55,8 @@ def pack_bytes(order: int, parent_order: int, cells):
             n = 0
             blob = b""
         else:
-            q10 = q10.reshape(-1, 10)
+            if not (q10.dtype == np.uint8 and q10.ndim == 2 and q10.shape[1] == 10):
+                raise ValueError(f"cell {local}: expected uint8 array of shape (n, 10), got {q10.dtype} {q10.shape}")
             n = q10.shape[0]
             blob = encode_cell(q10)
         if n > 0 and len(blob) == 0:
@@ -77,6 +79,10 @@ def read_pack_bytes(buf: bytes):
         raise ValueError("empty buffer")
     if buf[:4] == Q8PK_MAGIC:
         magic, order, parent_order, _, n_cells = struct.unpack_from("<4sBBHI", buf, 0)
+        if n_cells > MAX_CELLS:
+            raise ValueError("pack header size")
+        if len(buf) < 12 + 12 * n_cells:
+            raise ValueError("truncated pack table")
         offset = 12 + 12 * n_cells
         cells = []
         for i in range(n_cells):
@@ -90,6 +96,10 @@ def read_pack_bytes(buf: bytes):
     version, order, parent_order, _, n_cells = struct.unpack_from("<BBBBI", buf, 4)
     if version != VERSION:
         raise ValueError(f"unsupported version {version}")
+    if n_cells > MAX_CELLS:
+        raise ValueError("pack header size")
+    if len(buf) < 12 + 20 * n_cells:
+        raise ValueError("truncated pack table")
     offset = 12 + 20 * n_cells
     cells = []
     for i in range(n_cells):
@@ -101,6 +111,8 @@ def read_pack_bytes(buf: bytes):
         if count > 0 and blen == 0:
             raise ValueError("cell has count>0 and byte_len==0")
         if blen:
+            if offset + boff + blen > len(buf):
+                raise ValueError(f"cell {i} body out of range")
             cell_blob = buf[offset + boff:offset + boff + blen]
             dec = decode_cell(cell_blob, count)
             payload_parts.append(dec.tobytes())

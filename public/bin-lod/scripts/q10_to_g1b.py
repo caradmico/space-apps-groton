@@ -39,7 +39,7 @@ def convert(src: Path, dst: Path):
 
         cells = []
         for local, start, count in info["cells"]:
-            cell_bytes = info["payload"][start*10:(start+count)*10]
+            cell_bytes = info["payload"][start*10:(start+count)*10].reshape(count, 10)
             cells.append((local, cell_bytes))
 
         g1b_bytes = g1b.pack_bytes(order, parent_order, cells)

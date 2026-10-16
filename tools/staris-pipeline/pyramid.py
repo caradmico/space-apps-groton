@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import struct
 import sys
 from collections import defaultdict
@@ -508,7 +509,12 @@ def _pack_key(order, cell):
 
 
 def write_pack(path, order, parent_order, cells, fmt="q10"):
-    """cells: list of (local, records uint8 (n, 8)) sorted by local cell."""
+    """Write a Q10 (10-byte records) pack file.
+
+    fmt selects container: "q10" → Q8PK, "g1b" → G1BK (zlib).
+
+    cells: list of (local, records uint8 (n, 10)) sorted by local cell.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     if fmt == "g1b":
@@ -625,6 +631,69 @@ def run_pipeline(config, progress=print):
         if manifest.get("pass") == "done" and config.get("deep_source") == "tap" and write_deep:
             import dr3
             manifest = dr3.run_deep(config, progress)
+        return manifest
+    except RssExceeded as exc:
+        manifest["aborted"] = "rss"
+        manifest["rss"] = exc.rss
+        manifest["checkpoint"] = exc.checkpoint
+        save_manifest(output_dir, manifest)
+        raise
+
+
+def run_stream(config, state, shard_iter, progress=print):
+    """Run the write/verify stages of a streamed pyramid build."""
+    output_dir = config["output_dir"]
+    cap = int(config.get("rss_cap", 2 * 1024**3))
+    adapter_name = config.get("adapter", "hats")
+    adapter = ADAPTERS[adapter_name]
+    rec_size = REC_SIZE.get(adapter_name, 36)
+    write_deep = bool(config.get("write_deep", False))
+
+    manifest = load_manifest(output_dir)
+    if manifest and manifest.get("pass") == "done" and manifest.get("streamed"):
+        return manifest
+
+    os.makedirs(output_dir, exist_ok=True)
+    for d in ("parts", "packs"):
+        p = os.path.join(output_dir, d)
+        if os.path.isdir(p):
+            shutil.rmtree(p)
+
+    manifest = {
+        "version": 1,
+        "adapter": adapter_name,
+        "mode": config.get("mode", "PILOT"),
+        "write_deep": write_deep,
+        "rec_size": rec_size,
+        "cap": CAP,
+        "pass": "write",
+        "shards": [],
+        "aborted": None,
+        "streamed": True,
+        "closed_bases": sorted(int(b) for b in state["closed_bases"]),
+        "coarse_counts": {str(k): int(state["counts"][k].sum()) for k in COARSE_ORDERS},
+    }
+    _save_state(os.path.join(output_dir, "thresholds.npz"), state)
+    save_manifest(output_dir, manifest)
+
+    q8 = load_q8()
+
+    def gen():
+        for info in shard_iter:
+            manifest["shards"].append(info)
+            yield info
+
+    try:
+        _write_pass(config, adapter, gen(), state, q8, manifest, cap, progress, rec_size)
+        manifest["pass"] = "verify"
+        save_manifest(output_dir, manifest)
+
+        report = verify(output_dir, state, q8)
+        manifest["verify"] = report
+        manifest["pass"] = "done"
+        manifest["aborted"] = None
+        save_manifest(output_dir, manifest)
+        progress("verify " + json.dumps(report))
         return manifest
     except RssExceeded as exc:
         manifest["aborted"] = "rss"

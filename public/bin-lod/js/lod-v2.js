@@ -4,7 +4,7 @@
  */
 
 import { decodeQ8, decodeQ10, Q8_BYTES, Q10_BYTES } from "../scripts/q8.js";
-import { G1B_MAGIC, parseG1bHeader, inflateCell } from "../scripts/g1b.js";
+import { G1B_MAGIC, parseG1bHeader, inflateCell, checkG1bBounds } from "../scripts/g1b.js";
 import { ang2pixNest, children, pix2vecNest } from "./healpix.js";
 
 let THREE = null;
@@ -470,6 +470,7 @@ async function fetchHeader(level, url, existing) {
   }
   if (!pack || pack.incomplete) throw new Error(`${url} header incomplete`);
   held.pack = pack;
+  checkG1bBounds(pack, held.fileSize);
   state.packs.set(url, held);
   return held;
 }

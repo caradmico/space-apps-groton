@@ -1,6 +1,6 @@
 export const G1B_MAGIC = "G1BK";
 
-export function parseG1bHeader(bytes) {
+export function parseG1bHeader(bytes, fileSize = null) {
     if (bytes.length < 4 || String.fromCharCode(...bytes.slice(0, 4)) !== G1B_MAGIC) {
         throw new Error("bad magic");
     }
@@ -14,6 +14,7 @@ export function parseG1bHeader(bytes) {
     const parent = dv.getUint8(6);
     const nCells = dv.getUint32(8, true);
     const recordsAt = 12 + 20 * nCells;
+    if (recordsAt > 2_000_000) throw new Error("pack header size");
     const cells = [];
     let incomplete = false;
     if (bytes.length < recordsAt) {
@@ -26,10 +27,25 @@ export function parseG1bHeader(bytes) {
             const count = dv.getUint32(off + 8, true);
             const byteOffset = dv.getUint32(off + 12, true);
             const byteLen = dv.getUint32(off + 16, true);
+            if (count > 0 && byteLen === 0) throw new Error(`cell ${local} bad table entry`);
+            if (byteOffset + byteLen > 0xFFFFFFFF) throw new Error(`cell ${local} bad table entry`);
             cells.push({local, start, count, byteOffset, byteLen});
+        }
+        if (Number.isFinite(fileSize)) {
+            checkG1bBounds({recordsAt, cells}, fileSize);
         }
     }
     return {incomplete, version, order, parent, nCells, recordsAt, cells};
+}
+
+export function checkG1bBounds(pack, fileSize) {
+    if (!Number.isFinite(fileSize)) return pack;
+    for (const c of pack.cells) {
+        if (pack.recordsAt + c.byteOffset + c.byteLen > fileSize) {
+            throw new Error(`cell ${c.local} body out of range`);
+        }
+    }
+    return pack;
 }
 
 export async function inflateCell(blob, count) {
