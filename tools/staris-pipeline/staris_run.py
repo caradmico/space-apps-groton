@@ -13,6 +13,18 @@ import deep
 from r2_upload import make_sink, upload_file, object_exists
 
 
+def mem_available_gb():
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    return kb / (1024 ** 2)
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="StarIS Gaia DR3 pipeline CLI")
     parser.add_argument("--out", type=Path, required=True, help="Output directory")
@@ -35,6 +47,7 @@ def main():
     parser.add_argument("--range-workers", type=int, default=8)
     parser.add_argument("--pack-format", choices=["g1b", "q10"], default="g1b")
     parser.add_argument("--hats-base", type=str, default=None, help="HATS catalogue base URL (default: hats.HATS_BASE)")
+    parser.add_argument("--max-rss-gb", type=float, default=4.0, help="HATS: stop cleanly (exit 6, rerun resumes) if resident memory passes this; must be below free RAM")
     args = parser.parse_args()
 
     out = args.out
@@ -61,9 +74,17 @@ def main():
         log("regions are a TAP concept; for HATS use --partitions")
         sys.exit(4)
 
-    if args.source == "hats" and args.upload:
-        log("refusing: --upload is disabled for --source hats until the HATS deep pass and the R2 upload are tested end to end; run without --upload and upload separately")
+    if args.source == "hats" and args.upload and not args.deep:
+        log("refusing: --source hats --upload needs --deep (the tested upload path)")
         sys.exit(4)
+
+    if args.source == "hats":
+        avail = mem_available_gb()
+        if avail is not None and avail < args.max_rss_gb:
+            log(f"refusing: MemAvailable {avail:.1f} GB is below --max-rss-gb {args.max_rss_gb}")
+            sys.exit(6)
+        else:
+            log(f"RSS cap {args.max_rss_gb} GB (MemAvailable {avail} GB)")
 
     if not args.coarse and not args.deep:
         args.coarse = True
@@ -112,6 +133,7 @@ def main():
     limit_cells = None
     coarse_ok = False
     deep_ok = False
+    hats_upload_ok = False
     if args.region:
         order_s, cells_s = args.region.split(":", 1)
         order = int(order_s)
@@ -145,12 +167,16 @@ def main():
                 "write_deep": bool(args.deep),
                 "deep_source": "hats",
                 "pack_format": args.pack_format,
-                "rss_cap": 2 * 1024**3,
+                "rss_cap": int(args.max_rss_gb * 1024**3),
                 "guard": guard,
                 "region": None,
             }
             log("starting HATS stream")
-            hm, pyr_manifest = hats_stream.run(str(out), partitions=parts, config=config, base=args.hats_base or hats.HATS_BASE, workers=args.hats_workers, range_workers=args.range_workers, guard=guard, progress=log)
+            try:
+                hm, pyr_manifest = hats_stream.run(str(out), partitions=parts, config=config, base=args.hats_base or hats.HATS_BASE, workers=args.hats_workers, range_workers=args.range_workers, guard=guard, progress=log, rss_cap=int(args.max_rss_gb * 1024**3))
+            except pyramid.RssExceeded as e:
+                log(f"RSS guard stop: {e}. Checkpoint saved; rerun the same command to resume")
+                sys.exit(6)
             v = pyr_manifest.get("verify", {})
             rows_in = sum(int(s.get("n", 0)) for s in pyr_manifest.get("shards", []))
             deep_rows = sum(int(x) for x in pyr_manifest.get('deep_counts', {}).values())
@@ -209,7 +235,7 @@ def main():
             log("coarse counts match")
             coarse_ok = True
 
-    if args.upload:
+    if args.upload and args.source == "tap":
         log("uploading coarse packs")
         prefix_packs = args.prefix.rstrip("/") + "/packs/"
         sink_packs = make_sink(args.bucket, prefix_packs, args.secrets_dir)
@@ -229,6 +255,29 @@ def main():
                 secrets_dir=args.secrets_dir,
             )
         log("coarse upload done")
+
+    if args.upload and args.source == "hats":
+        prefix_packs = args.prefix.rstrip("/") + "/packs/"
+        packs_d = pyramid_dir / "packs"
+        pack_files = sorted(packs_d.glob("*.pack"))
+        expected = sorted(str(l["pack"]) for l in pyr_manifest.get("levels", []))
+        if [p.name for p in pack_files] != expected:
+            log(f"UPLOAD CHECK FAILED: {len(pack_files)} pack files on disk, {len(expected)} levels in the manifest"); sys.exit(7)
+        n_deep = sum(1 for l in pyr_manifest.get("levels", []) if int(l["order"]) >= 7)
+        log(f"uploading {len(pack_files)} packs ({len(pack_files) - n_deep} coarse, {n_deep} deep) to {prefix_packs}")
+        sink = make_sink(args.bucket, prefix_packs, args.secrets_dir)
+        for p in pack_files: sink(str(p), p.name)
+        for p in pack_files:
+            key = prefix_packs + p.name
+            if not object_exists(key, size=p.stat().st_size, bucket=args.bucket, secrets_dir=args.secrets_dir):
+                log(f"UPLOAD VERIFY FAILED: {key} missing or wrong size; not uploading tiles.json or publishing"); sys.exit(7)
+        tiles_p = packs_d / "tiles.json"
+        tiles_key = prefix_packs + "tiles.json"
+        upload_file(tiles_p, tiles_key, args.bucket, cache_control="public, max-age=300", secrets_dir=args.secrets_dir)
+        if not object_exists(tiles_key, size=tiles_p.stat().st_size, bucket=args.bucket, secrets_dir=args.secrets_dir):
+            log(f"UPLOAD VERIFY FAILED: {tiles_key} missing or wrong size; not publishing"); sys.exit(7)
+        hats_upload_ok = True
+        log(f"verified {len(pack_files)} packs and tiles.json under {prefix_packs}")
 
     if args.deep and args.source == "tap":
         log("starting deep pass")
@@ -268,7 +317,7 @@ def main():
             )
             log("deep upload done")
 
-    if args.upload and args.region is None and args.coarse and args.deep and coarse_ok and deep_ok and not args.partitions:
+    if args.upload and args.region is None and args.coarse and args.deep and coarse_ok and deep_ok and (args.source != "hats" or hats_upload_ok) and not args.partitions:
         data = {
             'prefix': args.prefix,
             'tiles': args.r2_base.rstrip('/') + '/' + args.prefix.strip('/') + '/packs/tiles.json'
