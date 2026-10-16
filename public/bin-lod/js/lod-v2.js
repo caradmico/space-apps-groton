@@ -4,6 +4,7 @@
  */
 
 import { decodeQ8, decodeQ10, Q8_BYTES, Q10_BYTES } from "../scripts/q8.js";
+import { G1B_MAGIC, parseG1bHeader, inflateCell, checkG1bBounds } from "../scripts/g1b.js";
 import { ang2pixNest, children, pix2vecNest } from "./healpix.js";
 
 let THREE = null;
@@ -198,6 +199,7 @@ function parseHeaderBytes(bytes) {
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const magic = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+  if (magic === G1B_MAGIC) return { ...parseG1bHeader(bytes), g1b: true };
   if (magic !== "Q8PK") throw new Error("pack magic");
   const order = view.getUint8(4);
   const parent = view.getUint8(5);
@@ -268,8 +270,14 @@ function decodeCell(held, level, local) {
   const recBytes = recordBytes(held);
   const useQ10 = recBytes === 10;
   const decoder = useQ10 ? decodeQ10 : decodeQ8;
-  const raw = readBytes(held, pack.recordsAt + meta.start * recBytes, meta.count * recBytes);
-  if (!raw) return null;
+  let raw;
+  if (pack.g1b) {
+    raw = held.inflated && held.inflated.get(meta.local);
+    if (!raw) return null;
+  } else {
+    raw = readBytes(held, pack.recordsAt + meta.start * recBytes, meta.count * recBytes);
+    if (!raw) return null;
+  }
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
   const ra = new Float64Array(meta.count);
   const dec = new Float64Array(meta.count);
@@ -462,11 +470,35 @@ async function fetchHeader(level, url, existing) {
   }
   if (!pack || pack.incomplete) throw new Error(`${url} header incomplete`);
   held.pack = pack;
+  checkG1bBounds(pack, held.fileSize);
   state.packs.set(url, held);
   return held;
 }
 
+function cellSpan(held, meta) {
+  const pack = held.pack;
+  if (pack.g1b) {
+    return { start: pack.recordsAt + meta.byteOffset, length: meta.byteLen };
+  }
+  const recBytes = recordBytes(held);
+  return { start: pack.recordsAt + meta.start * recBytes, length: meta.count * recBytes };
+}
+
+async function inflateCells(held, metas) {
+  if (!held.pack.g1b) return;
+  if (!held.inflated) held.inflated = new Map();
+  for (const meta of metas) {
+    if (!meta.count || held.inflated.has(meta.local)) continue;
+    const span = cellSpan(held, meta);
+    const raw = readBytes(held, span.start, span.length);
+    if (raw) {
+      held.inflated.set(meta.local, await inflateCell(raw, meta.count));
+    }
+  }
+}
+
 function recordBytes(held) {
+  if (held && held.pack && held.pack.g1b) return 10;
   if (state.index && state.index.record) {
     const record = state.index.record;
     return record.bytes || (record.format === "q10" ? 10 : Q8_BYTES);
@@ -504,14 +536,13 @@ async function loadCells(group) {
   if (!pieces.length) return;
   const missing = [];
   for (const piece of pieces) {
-    const start = held.pack.recordsAt + piece.meta.start * recordBytes(held);
-    const end = start + piece.meta.count * recordBytes(held);
-    if (!readBytes(held, start, end - start)) missing.push({ start, end });
+    const span = cellSpan(held, piece.meta);
+    if (!readBytes(held, span.start, span.length)) missing.push(span);
   }
   if (missing.length) {
     if (held.whole) throw new Error(`${held.url} missing records`);
     const start = missing[0].start;
-    const end = missing[missing.length - 1].end;
+    const end = missing[missing.length - 1].start + missing[missing.length - 1].length;
     const res = await gatedFetch(held.url, { headers: { Range: `bytes=${start}-${end - 1}` } });
     const body = new Uint8Array(await readBuffer(res, held.url));
     storeBody(held, res, start, body);
@@ -520,6 +551,7 @@ async function loadCells(group) {
       if (!parsed.incomplete) held.pack = parsed;
     }
   }
+  await inflateCells(held, pieces.map(p => p.meta));
   for (const piece of pieces) {
     if (!piece.meta.count) continue;
     const entry = decodeCell(held, level, piece.local);
@@ -1143,6 +1175,7 @@ export async function startV2() {
   const order0 = { order: 0, pack: "o0_p0.pack", pack_id: 0, pack_parent_order: -1 };
   const held0 = holdFull(order0, order0Res.url || order0Url, order0Bytes);
   state.packs.set(order0Url, held0);
+  await inflateCells(held0, held0.pack.cells);
   for (const cell of held0.pack.cells) {
     const entry = decodeCell(held0, order0, cell.local);
     if (entry) touch(entry);

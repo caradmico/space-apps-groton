@@ -1,0 +1,7 @@
+# pyarrow only needed for --source hats
+numpy
+pyarrow>=14
+
+# test dependencies
+pytest
+pandas

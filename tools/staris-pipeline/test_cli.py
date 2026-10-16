@@ -27,7 +27,7 @@ def run_cli(argv, calls, object_exists=lambda *a, **k: True):
     original_tap_ANON_MAX_ROWS = getattr(tap, 'ANON_MAX_ROWS', None)
 
     try:
-        sys.argv = ['staris_run.py'] + argv
+        sys.argv = ['staris_run.py', '--source', 'tap'] + argv
         fake = FakeTap()
 
         def fake_runner(adql):
