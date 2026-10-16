@@ -1053,7 +1053,9 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec
                     part_index += 1
 
     for info in shards:
-        for chunk in adapter(info["path"]):
+        for chunk_idx, chunk in enumerate(adapter(info["path"])):
+            if guard and chunk_idx % 64 == 63:
+                guard()
             finite = np.isfinite(chunk["ra"]) & np.isfinite(chunk["dec"]) & np.isfinite(chunk["mag"])
             sids = chunk["source_id"]
             for i in range(sids.shape[0]):

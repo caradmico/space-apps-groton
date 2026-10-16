@@ -6,6 +6,7 @@ import threading
 import time
 import gc
 import hashlib
+import errno
 import weakref
 import numpy as np
 import pytest
@@ -462,6 +463,8 @@ def test_cli_write_pass_stop_resumes_byte_identical(
     with open(ckpt_path) as f:
         ckpt = json.load(f)
     assert len(ckpt.get("shards", [])) == 1
+    assert not (stop_dir / "hats_stream" / "cand").exists()
+    assert (stop_dir / "hats_stream" / "thresholds.npz").exists()
 
     # resume
     monkeypatch.setattr(pyramid, "check_rss", real_check)
@@ -482,3 +485,205 @@ def test_cli_write_pass_stop_resumes_byte_identical(
     clean_tiles = clean_dir / "pyramid" / "packs" / "tiles.json"
     stop_tiles = stop_dir / "pyramid" / "packs" / "tiles.json"
     assert clean_tiles.read_bytes() == stop_tiles.read_bytes()
+
+
+
+
+
+def test_pass2_crash_at_each_finalize_step_resumes_byte_identical(monkeypatch, tmp_path):
+    monkeypatch.setattr(pyramid, "HEAP_M", 64)
+    parts = [(5, p) for p in (0, 1, 2, 3, 64, 65, 66, 67)]
+    fake, _ = make_fake(20_000, 5)
+    monkeypatch.setattr(hats, "read_partition", fake)
+
+    clean_dir = tmp_path / "clean"
+    clean_dir.mkdir()
+    sc = hats_stream.scan(clean_dir, parts, base="http://fake/", workers=4, range_workers=1, progress=lambda m: None)
+    clean = {}
+    for info in hats_stream.iter_units(
+        clean_dir, clean_dir / "cache", sc, base="http://fake/", workers=4, range_workers=1, progress=lambda m: None, keep_files=True
+    ):
+        clean[info["name"]] = file_sha256(info["path"])
+    assert len(clean) == 2
+
+    steps = [
+        "last_finalize_json",
+        "before_rename",
+        "after_rename_before_state",
+        "after_state",
+        "before_finalize_unlink",
+        "consumer_after_yield",
+    ]
+    passed = []
+
+    for step_name in steps:
+        work_dir = tmp_path / step_name
+        work_dir.mkdir()
+
+        sc = hats_stream.scan(work_dir, parts, base="http://fake/", workers=4, range_workers=1, progress=lambda m: None)
+
+        if step_name == "last_finalize_json":
+            real_atomic = hats_stream._atomic_write_json
+
+            def wrap_atomic_write_json(path, obj):
+                if obj.get("unit") == 0 and obj.get("next") == 256:
+                    raise OSError(errno.ENOSPC, "injected")
+                return real_atomic(path, obj)
+
+            with monkeypatch.context() as m:
+                m.setattr(hats_stream, "_atomic_write_json", wrap_atomic_write_json)
+                with pytest.raises(OSError):
+                    for _ in hats_stream.iter_units(
+                        work_dir,
+                        work_dir / "cache",
+                        sc,
+                        base="http://fake/",
+                        workers=4,
+                        range_workers=1,
+                        progress=lambda m: None,
+                        keep_files=True,
+                    ):
+                        pass
+
+        elif step_name == "before_rename":
+            real_replace = os.replace
+
+            def wrap_replace(src, dst):
+                if str(src).endswith("GaiaSource_hats_o2_000.hatsx.tmp"):
+                    raise OSError(errno.ENOSPC, "injected")
+                return real_replace(src, dst)
+
+            with monkeypatch.context() as m:
+                m.setattr(os, "replace", wrap_replace)
+                with pytest.raises(OSError):
+                    for _ in hats_stream.iter_units(
+                        work_dir,
+                        work_dir / "cache",
+                        sc,
+                        base="http://fake/",
+                        workers=4,
+                        range_workers=1,
+                        progress=lambda m: None,
+                        keep_files=True,
+                    ):
+                        pass
+
+        elif step_name == "after_rename_before_state":
+            real_state = hats_stream._write_pass2_state
+
+            def wrap_write_pass2_state(path, state):
+                if 0 in state.get("ready", []):
+                    raise OSError(errno.ENOSPC, "injected")
+                return real_state(path, state)
+
+            with monkeypatch.context() as m:
+                m.setattr(hats_stream, "_write_pass2_state", wrap_write_pass2_state)
+                with pytest.raises(OSError):
+                    for _ in hats_stream.iter_units(
+                        work_dir,
+                        work_dir / "cache",
+                        sc,
+                        base="http://fake/",
+                        workers=4,
+                        range_workers=1,
+                        progress=lambda m: None,
+                        keep_files=True,
+                    ):
+                        pass
+
+        elif step_name == "after_state":
+            real_state = hats_stream._write_pass2_state
+
+            def wrap_write_pass2_state(path, state):
+                real_state(path, state)
+                if 0 in state.get("ready", []):
+                    raise OSError(errno.ENOSPC, "injected")
+
+            with monkeypatch.context() as m:
+                m.setattr(hats_stream, "_write_pass2_state", wrap_write_pass2_state)
+                with pytest.raises(OSError):
+                    for _ in hats_stream.iter_units(
+                        work_dir,
+                        work_dir / "cache",
+                        sc,
+                        base="http://fake/",
+                        workers=4,
+                        range_workers=1,
+                        progress=lambda m: None,
+                        keep_files=True,
+                    ):
+                        pass
+
+        elif step_name == "before_finalize_unlink":
+            real_unlink = os.unlink
+
+            def wrap_unlink(path):
+                if str(path).endswith("finalize.json"):
+                    with open(path) as f:
+                        data = json.load(f)
+                    if data.get("unit") == 0:
+                        raise OSError(errno.ENOSPC, "injected")
+                return real_unlink(path)
+
+            with monkeypatch.context() as m:
+                m.setattr(os, "unlink", wrap_unlink)
+                with pytest.raises(OSError):
+                    for _ in hats_stream.iter_units(
+                        work_dir,
+                        work_dir / "cache",
+                        sc,
+                        base="http://fake/",
+                        workers=4,
+                        range_workers=1,
+                        progress=lambda m: None,
+                        keep_files=True,
+                    ):
+                        pass
+
+        else:  # consumer_after_yield
+            yielded = []
+
+            def consumer():
+                for info in hats_stream.iter_units(
+                    work_dir,
+                    work_dir / "cache",
+                    sc,
+                    base="http://fake/",
+                    workers=4,
+                    range_workers=1,
+                    progress=lambda m: None,
+                    keep_files=True,
+                ):
+                    yielded.append(info["name"])
+                    if info["name"] == "GaiaSource_hats_o2_000.hatsx":
+                        raise OSError(errno.ENOSPC, "injected")
+                return yielded
+
+            with pytest.raises(OSError):
+                consumer()
+
+        # resume
+        sc = hats_stream.scan(work_dir, parts, base="http://fake/", workers=4, range_workers=1, progress=lambda m: None)
+        resumed = {}
+        for info in hats_stream.iter_units(
+            work_dir,
+            work_dir / "cache",
+            sc,
+            base="http://fake/",
+            workers=4,
+            range_workers=1,
+            progress=lambda m: None,
+            keep_files=True,
+        ):
+            resumed[info["name"]] = file_sha256(info["path"])
+
+        assert resumed == clean
+
+        for name, digest in clean.items():
+            p = work_dir / "cache" / name
+            assert p.exists()
+            assert file_sha256(p) == digest
+
+        passed.append(step_name)
+
+    report("pass2_crash_steps", steps=passed)

@@ -123,6 +123,7 @@ def scan(
     state_path = _scan_state_path(work_dir)
     strag_dir = os.path.join(work_dir, "strag")
     cand_dir = os.path.join(work_dir, "cand")
+    thresh_path = os.path.join(work_dir, "thresholds.npz")
 
     if os.path.exists(state_path):
         with open(state_path) as f:
@@ -142,17 +143,23 @@ def scan(
             for fn in os.listdir(cand_dir) if os.path.exists(cand_dir) else ():
                 if fn.endswith((".spill", ".tmp")):
                     os.unlink(os.path.join(cand_dir, fn))
+            if os.path.exists(thresh_path):
+                os.unlink(thresh_path)
         else:
             if os.path.exists(strag_dir):
                 shutil.rmtree(strag_dir)
             if os.path.exists(cand_dir):
                 shutil.rmtree(cand_dir)
+            if os.path.exists(thresh_path):
+                os.unlink(thresh_path)
             sc = None
     else:
         if os.path.exists(strag_dir):
             shutil.rmtree(strag_dir)
         if os.path.exists(cand_dir):
             shutil.rmtree(cand_dir)
+        if os.path.exists(thresh_path):
+            os.unlink(thresh_path)
         sc = None
 
     if sc is None:
@@ -317,18 +324,35 @@ def _merge_pending(b, g, pending, cand_dir, k):
     os.replace(tmp_path, cand_path)
 
 
+def _fsync_dir(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def _write_scan_state(path, sc):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(sc, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
+    _fsync_dir(os.path.dirname(path) or ".")
 
 
 def _atomic_write_json(path, obj):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(obj, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
+    _fsync_dir(os.path.dirname(path) or ".")
 
 
 def thresholds(work_dir):
@@ -506,6 +530,9 @@ def iter_units(
                 state["spill_sizes"] = dict(spill_sizes)
                 _write_pass2_state(_pass2_state_path(work_dir), state)
 
+                if guard:
+                    guard()
+
                 if rss_cap is not None:
                     rss = pyramid.rss_bytes()
                     if rss > rss_cap:
@@ -518,61 +545,108 @@ def iter_units(
         # finalize unit
         finalize_path = _finalize_state_path(work_dir)
         tmp_path = os.path.join(cache_dir, f"GaiaSource_hats_o2_{u:03d}.hatsx.tmp")
+        out_path = os.path.join(cache_dir, f"GaiaSource_hats_o2_{u:03d}.hatsx")
+
+        fin = None
         if os.path.exists(finalize_path):
             with open(finalize_path) as f:
                 fin = json.load(f)
-            if fin["unit"] == u and os.path.exists(tmp_path):
+            if fin.get("unit") != u:
+                fin = None
+
+        adopted = False
+        if fin is not None:
+            expected = fin.get("tmp_size")
+            if os.path.exists(tmp_path):
+                # a
                 with open(tmp_path, "r+b") as f:
-                    f.truncate(fin["tmp_size"])
+                    f.truncate(expected)
                     f.seek(0, 2)
                 n = fin["n"]
                 dups_u = fin["dups"]
                 next_s_idx = fin["next"]
-            else:
+            elif fin.get("next") == 256 and os.path.exists(out_path):
+                got = os.path.getsize(out_path)
+                if (
+                    fin.get("next") == 256
+                    and fin.get("n") is not None
+                    and got == expected == fin["n"] * 36
+                ):
+                    # b
+                    n = fin["n"]
+                    dups_u = fin["dups"]
+                    adopted = True
+                    progress(f"unit {u:03d}: adopted finished shard after interrupted rename")
+                else:
+                    raise RuntimeError(
+                        f"unit {u:03d}: finalize.json says next={fin.get('next')} n={fin.get('n')} "
+                        f"but the .tmp is missing; refusing to rebuild over existing data. "
+                        f"Delete hats_stream/pass2.json and hats_stream/finalize.json to redo pass 2."
+                    )
+            elif fin.get("next") == 256 and fin.get("n") == 0 and not os.path.exists(out_path):
+                # c
                 n = 0
                 dups_u = 0
-                next_s_idx = 0
-                with open(tmp_path, "wb") as f:
-                    pass
+                open(tmp_path, "wb").close()
+                next_s_idx = 256
+            else:
+                # d
+                raise RuntimeError(
+                    f"unit {u:03d}: finalize.json says next={fin.get('next')} n={fin.get('n')} "
+                    f"but the .tmp is missing; refusing to rebuild over existing data. "
+                    f"Delete hats_stream/pass2.json and hats_stream/finalize.json to redo pass 2."
+                )
         else:
+            # e
+            if os.path.exists(out_path) and u not in state.get("ready", []):
+                raise RuntimeError(
+                    f"unit {u:03d}: out_path already exists for a unit that is not in ready; "
+                    "refusing to overwrite. Delete hats_stream/pass2.json to redo pass 2."
+                )
             n = 0
             dups_u = 0
             next_s_idx = 0
             with open(tmp_path, "wb") as f:
                 pass
 
-        strag_path = os.path.join(strag_dir, f"o2_{u:03d}.spill")
-        if os.path.exists(strag_path):
-            strag_arr = np.fromfile(strag_path, dtype=tap.DR3X_DTYPE)
-            strag_o6 = strag_arr["source_id"] >> 47
-        else:
-            strag_arr = np.array([], dtype=tap.DR3X_DTYPE)
-            strag_o6 = np.array([], dtype=np.int64)
+        if not adopted:
+            strag_path = os.path.join(strag_dir, f"o2_{u:03d}.spill")
+            if os.path.exists(strag_path):
+                strag_arr = np.fromfile(strag_path, dtype=tap.DR3X_DTYPE)
+                strag_o6 = strag_arr["source_id"] >> 47
+            else:
+                strag_arr = np.array([], dtype=tap.DR3X_DTYPE)
+                strag_o6 = np.array([], dtype=np.int64)
 
-        o6_start = u * 256
-        for i in range(next_s_idx, 256):
-            s = o6_start + i
-            pieces = []
-            spill_path = os.path.join(spill_dir, f"o6_{s:05d}.spill")
-            if os.path.exists(spill_path):
-                pieces.append(np.fromfile(spill_path, dtype=tap.DR3X_DTYPE))
-            mask = strag_o6 == s
-            if np.any(mask):
-                pieces.append(strag_arr[mask])
-            if pieces:
-                arr, d = hats.clean(np.concatenate(pieces))
-                with open(tmp_path, "ab") as f:
-                    f.write(arr.tobytes())
-                n += len(arr)
-                dups_u += d
-                del arr
-            _atomic_write_json(finalize_path, {"unit": u, "next": i + 1, "tmp_size": os.path.getsize(tmp_path), "n": n, "dups": dups_u})
-            if os.path.exists(spill_path):
-                os.unlink(spill_path)
-            if rss_cap is not None:
-                rss = pyramid.rss_bytes()
-                if rss > rss_cap:
-                    raise pyramid.RssExceeded(rss, rss_cap, f"pass 2 unit {u:03d} sub-cell {s}")
+            o6_start = u * 256
+            for i in range(next_s_idx, 256):
+                s = o6_start + i
+                pieces = []
+                spill_path = os.path.join(spill_dir, f"o6_{s:05d}.spill")
+                if os.path.exists(spill_path):
+                    pieces.append(np.fromfile(spill_path, dtype=tap.DR3X_DTYPE))
+                mask = strag_o6 == s
+                if np.any(mask):
+                    pieces.append(strag_arr[mask])
+                if pieces:
+                    arr, d = hats.clean(np.concatenate(pieces))
+                    with open(tmp_path, "ab") as f:
+                        f.write(arr.tobytes())
+                    n += len(arr)
+                    dups_u += d
+                    del arr
+                _atomic_write_json(
+                    finalize_path,
+                    {"unit": u, "next": i + 1, "tmp_size": os.path.getsize(tmp_path), "n": n, "dups": dups_u},
+                )
+                if os.path.exists(spill_path):
+                    os.unlink(spill_path)
+                if i % 16 == 15 and guard:
+                    guard()
+                if rss_cap is not None:
+                    rss = pyramid.rss_bytes()
+                    if rss > rss_cap:
+                        raise pyramid.RssExceeded(rss, rss_cap, f"pass 2 unit {u:03d} sub-cell {s}")
 
         stats["dups_global"] += dups_u
         stats["rows_out"] += n
@@ -591,8 +665,13 @@ def iter_units(
         fname = f"GaiaSource_hats_o2_{u:03d}.hatsx"
         out_path = os.path.join(cache_dir, fname)
 
-        # Crash ordering: shard first, then state, then cleanup
-        os.replace(tmp_path, out_path)
+        if not adopted:
+            # finalize tmp, rename, fsync, then state
+            with open(tmp_path, "rb+") as f:
+                os.fsync(f.fileno())
+            os.replace(tmp_path, out_path)
+            _fsync_dir(cache_dir)
+
         state["ready"].append(u)
         state["stats"] = {"rows_out": stats["rows_out"], "dups_global": stats["dups_global"], "files": list(stats["files"])}
         stats["files"].append(fname)
@@ -632,7 +711,10 @@ def _write_pass2_state(path, st):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(st, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
+    _fsync_dir(os.path.dirname(path) or ".")
 
 
 def run(
@@ -667,7 +749,21 @@ def run(
     )
     progress("scan finished")
 
-    state = thresholds(work_dir)
+    thresh_path = os.path.join(work_dir, "thresholds.npz")
+    if sc.get("thresholds_file") and os.path.exists(thresh_path):
+        state = pyramid._load_state(thresh_path)
+    else:
+        state = thresholds(work_dir)
+        tmp = os.path.join(work_dir, "thresholds.tmp.npz")
+        pyramid._save_state(tmp, state)
+        os.replace(tmp, thresh_path)
+        _fsync_dir(work_dir)
+        sc["thresholds_file"] = "thresholds.npz"
+        _write_scan_state(_scan_state_path(work_dir), sc)
+        cand = os.path.join(work_dir, "cand")
+        if os.path.exists(cand):
+            shutil.rmtree(cand)
+
     run_stats = {"rows_out": 0, "dups_global": 0, "files": []}
 
     done = pyramid.stream_done_shards(config["output_dir"], config) if config else set()
