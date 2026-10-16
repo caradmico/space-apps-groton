@@ -15,7 +15,7 @@ This work has made use of data from the European Space Agency (ESA) mission Gaia
 3. **Write.** A star's order is the minimum `k <= 6` with key `<= tau_k`. Stars that miss every threshold are deep: they are counted into orders 7..12, and written only if enabled. Cells are brightest-first, Q8-encoded, written as part files (`.tmp` then rename), then assembled into packs. Deep uses `deep.py` (per order-2 unit, resumable, uploads each pack via `deep_sink_factory` then deletes it).
 4. **Check.** Pack bytes / 8, pass-1 counts, pass-2 records, and pack `n` agree. Per-cell hashes agree. Up to 10,000 decoded records per order stay inside the Q8 error limits. `verify.bytes_over_62` is the input record count. `verify.identity_ok` is true when that equals the coarse records written plus the deep counts.
 
-`manifest.json` in the output folder is the resume checkpoint. Units are base cells in the threshold pass and order-2 cells in the write pass. After every shard the notebook checks RSS. Over 2 GB it writes the checkpoint and stops. Box CLI adds disk guards (`--disk-cap-gb`, `--min-free-gb`; exit code 2 = guard stop, rerun resumes).
+`hats_stream/scan.json` (per partition), `hats_stream/pass2.json` (per partition), `hats_stream/finalize.json` (per sub-cell) and `pyramid/stream_ckpt.json` (per order-2 shard) are the resume checkpoints. Exit 2 or 6 reruns resume from the last written checkpoint. Box CLI adds disk guards (`--disk-cap-gb`, `--min-free-gb`; exit code 2 = guard stop, rerun resumes). Final pack assembly also runs the disk guard (before the first pack and every 256 MiB).
 
 ## Packs
 
@@ -25,7 +25,7 @@ New runs write G1BK packs by default (`--pack-format g1b`; `q10` keeps Q8PK). G1
 
 ## Input
 
-**HATS mode (default):** `--source hats` in the CLI. `hats_stream.py` streams the LSDB HATS copy of Gaia DR3 (https://data.lsdb.io/hats/gaia_dr3/gaia/, 2,016 parquet partitions, 1,812,731,847 rows) in two network passes. Pass 1 (`scan`) reads every partition once, keeps the brightest `M = 1024 * 7` candidates per order-6 cell in `OUT/hats_stream/cand/`, and saves stragglers (source_id outside the partition's order-2 cells) in `OUT/hats_stream/strag/`. Pass 2 re-reads partitions one order-2 cell at a time in ascending order, writes that cell's `.hatsx` file (per order-4 sub-cell, RAM bounded), feeds it to the pyramid write pass and deletes it before the next cell. The full raw cache is never on disk at once. `hats.clean` keeps the row with the smallest `(mag, ra, dec, parallax, bp_rp)` for duplicate source_ids. Pass 1 resumes per 64 partitions; pass 2 restarts from the first order-2 cell if interrupted (it re-downloads). Use `--partitions first:N` or `--partitions 2/0,2/1` for a test. `pip install -r requirements.txt` installs numpy, pyarrow, pytest and pandas. `--hats-base URL` points at another HATS copy (tests use a local server).
+**HATS mode (default):** `--source hats` in the CLI. `hats_stream.py` streams the LSDB HATS copy of Gaia DR3 (https://data.lsdb.io/hats/gaia_dr3/gaia/, 2,016 parquet partitions, 1,812,731,847 rows) in two network passes. Pass 1 keeps at most `--hats-workers` downloads in flight and folds each result in as soon as it arrives (bounded fetch); candidates are stored per base cell and order-3 group and merged when the pending rows reach 2 M in total. Pass 2 streams one order-4 sub-cell at a time: each partition's rows are spilled per order-6 cell to disk, then each sub-cell is cleaned and appended to the order-2 shard; peak RAM depends on the largest order-4 sub-cell, not the order-2 cell. The full raw cache is never on disk at once. `hats.clean` keeps the row with the smallest `(mag, ra, dec, parallax, bp_rp)` for duplicate source_ids. Pass 1 checkpoints after every partition. Pass 2 resumes at the next unfetched partition or next sub-cell. Use `--partitions first:N` or `--partitions 2/0,2/1` for a test. `pip install -r requirements.txt` installs numpy, pyarrow, pytest and pandas. `--hats-base URL` points at another HATS copy (tests use a local server).
 
 **TAP mode (`--source tap`):** `SOURCE="dr3_tap"` in notebook or `--coarse` in CLI. Uses `tap.fetch_coarse(cache_dir, workers=4, region=(order,cells)|None, ...)` to produce `.dr3x` files (36 B records). `pyramid` adapter `"dr3_tap"` reads them and derives colour class from `bp_rp`. Coarse queries target orders 0-6 (≤67.1 M rows, ~1,820 async jobs, ~7 GB CSV transfer → 2.4 GB `.dr3x`). Pilot uses `pilot_dr3` config key = exact list of input `.dr3x` basenames. Authenticated TAP (optional `GAIA_USER`/`GAIA_PASSWORD`) allows unlimited rows.
 
@@ -54,39 +54,51 @@ Default source is HATS (`--source hats`, flags `--partitions`, `--hats-workers`,
 
 `--disk-cap-gb` now defaults to 30 (was 20). `--min-free-gb` stays 10. With `--deep`, the HATS run now checks that the deep pack records equal the deep counts and that coarse pack records equal the pass-2 coarse count; a mismatch exits 5.
 
-`--source hats --upload` is refused (exit 4) before any download unless `--deep` is also given. With `--deep`, after the deep check passes, the CLI checks that the local pack files match the manifest levels, uploads every pack (coarse and deep) to `PREFIX/packs/`, checks each object exists on R2 with the same byte size, then uploads `PREFIX/packs/tiles.json` last and checks its size. Any missing file or size mismatch exits 7 and nothing is published. `v2-dr3/current.json` is published only after all of that passes, and never for `--partitions` runs. Prefix rules are unchanged (fresh versioned prefix, `--prefix auto`).
+`--source hats --upload` is refused (exit 4) before any download unless `--deep` is also given. With `--deep`, after the deep check passes, the CLI checks that the local pack files match the manifest levels, uploads every pack (coarse and deep) to `PREFIX/packs/`, checks each object exists on R2 with the same byte size, then uploads `PREFIX/packs/tiles.json` last and checks its size. The sink skips any object whose stored md5 metadata matches the local file, so a rerun after exit 7 only re-uploads packs that are missing or changed. Any missing file or size mismatch exits 7 and nothing is published. `v2-dr3/current.json` is published only after all of that passes, and never for `--partitions` runs. Prefix rules are unchanged (fresh versioned prefix, `--prefix auto` gives v2-dr3-YYYYMMDD/; --overwrite is refused for full runs).
 
-`--max-rss-gb` (default 4.0): before any download the HATS run reads MemAvailable from /proc/meminfo and exits 6 if it is below the cap. Pass 1 checks RSS after each partition; over the cap it writes its checkpoint (`hats_stream/scan.json`) and exits 6. Pass 2 checks RSS after each order-4 sub-cell; over the cap it exits 6. Rerun the same command to resume: pass 1 resumes from its checkpoint, pass 2 restarts from the first order-2 cell.
+`--partitions ... --deep --upload` is a real upload: it writes the packs and tiles.json to R2 under PREFIX (only current.json is skipped). Use a throwaway test prefix.
+
+**Recovery after tiles.json is on R2.** Any rerun with the same prefix is refused with exit 4 (the output folder is tied to its prefix in OUT/prefix.txt, and --overwrite is refused for full runs). If the log shows the deep check passed and no exit 7, but current.json was not published (for example the run died during that last step), publish it by hand: upload OUT/current.json (or a JSON `{"prefix": "PREFIX", "tiles": "https://stars.graphicoregon.com/PREFIX/packs/tiles.json"}`) to `v2-dr3/current.json` with `r2_upload.upload_file`, cache-control `public, max-age=60`. If tiles.json failed its size check (exit 7) or anything else is in doubt, start again with a new explicit prefix (for example `v2-dr3-YYYYMMDD-b/`) and a new empty --out folder.
+
+`--max-rss-gb` (default 4.0): before any download the run reads MemAvailable and exits 6 if it is below the cap; pass 1 stops submitting and cancels pending downloads before writing scan.json; pass 2 checks after each partition and each sub-cell; the write pass checks after each shard; rerun resumes as described above.
 
 Exit codes: 1 error, 2 disk guard, 3 count mismatch, 4 refused, 5 deep check failed, 6 RAM guard stop, 7 upload verify failed.
 
 Use on a persistent Linux box for full coarse + deep. Full runs must use a fresh versioned prefix (--prefix auto gives v2-dr3-YYYYMMDD/; --overwrite is refused for full runs); --prefix is required; runs refuse (exit 4) if PREFIX/packs/tiles.json exists unless --overwrite (test regions only); --deep without --upload makes no R2 calls; tiles.json uploads last. With `--source tap`, only after a successful full run (no `--region`) is v2-dr3/current.json updated to point at the new prefix. The viewer can load it with ?lod=v2&index=https://stars.graphicoregon.com/<prefix>/packs/tiles.json; switch the default INDEX_URL in a PR only after the run.
 
+## Large-cell test
+
+Real large cell (24 real HATS partitions inside order-2 cell 112, 30,661,736 rows, including the densest order-4 sub-cell 1795 with 16,765,532 rows; `--deep --max-rss-gb 3`): peak RSS (VmHWM) 1,671,876 kB (about 1.6 GiB); per phase max RSS: pass 1 1,540,528 kB, pass 2 1,570,660 kB, write and check 1,410,508 kB. Wall time: pass 1 50 s, pass 2 65 s, write pass 776 s (25.3 microseconds per row with deep), check 15 s. Peak output folder 2.28 GB (the shard was 1.10 GB); final part files 305 MB (10.0 B per record) and packs 131 MB (4.3 B per record) for 30,484,414 records. Deep check ok, identity ok.
+
 ## 2-partition test
 
-`--partitions 2/0,2/1 --coarse`: output packs and tiles.json are byte-identical to the earlier non-streamed run (7 packs, 688 cells, 700,429 coarse records). Peak size of the output folder was 89.5 MB (old code: 101.3 MB on the same test). Over two runs: wall time 82-86 s, peak RSS (VmHWM) 941,636-956,612 kB.
+`--partitions 2/0,2/1 --coarse`: packs and tiles.json still byte-identical (7 packs, 688 cells, 700,429 records); peak output folder 102.4 MB; peak RSS 884,436 kB; about 86 s.
 
 ## Full-run estimates
 
-Peak output folder about 12.5 GB = largest order-2 cell (168.7 M rows × 36 B = 6.1 GB) + candidate files at most 4.9 GB (12 bases × 4096 cells × 7168 × 14 B) + 0.4 GB merge temp + about 1.1 GB coarse part files and packs. Old code needed about 65 GB for the cache alone, against about 51 GB free on the box.
-
-Pass 1 about 0.9-1.3 h and pass 2 downloads about 1.0-1.5 h (89 GB at the 4.8-7.0 MB/s per stream measured, 4 streams), plus the pyramid write pass at the measured 20 microseconds per row, about 10.2 h. Total about 12-13 h.
+**Estimates (scaled from the measured large-cell run; not measured on the full sky):**
+- RAM: about 1.7-2 GB peak, since the largest partition (1,988,183 rows) and the densest sub-cell were inside the measured run. Use `--max-rss-gb 3`.
+- Disk: about 30-36 GB peak in the output folder (largest order-2 shard 6.1 GB, possibly twice that briefly, as the measured run peaked at about 2× its shard; candidates up to 4.9 GB; deep part files about 17.3 GB and deep packs about 7.4 GB at the measured bytes per record, both on disk at the end until upload). Keep `--disk-cap-gb 45` for headroom. With `--min-free-gb 15` the volume needs about 60 GB free at the start.
+- Time: pass 1 about 1-1.2 h, pass 2 downloads about 1.5 h, write pass about 12.7 h (1.81 B rows at the measured 25.3 microseconds per row), check about 15 min; about 15-16 h before upload. Upload of about 7.4 GB packs is unmeasured; allow 16-18 h.
 
 ## Full-run command (coarse + deep + upload)
 ```bash
 cd tools/staris-pipeline
 python3 staris_run.py --source hats --coarse --deep --upload --prefix auto \
-  --out /workspace/staris-hats-full --max-rss-gb 4 --disk-cap-gb 45 --min-free-gb 10
+  --out /path/to/staris-hats-full --max-rss-gb 3 --disk-cap-gb 45 --min-free-gb 15
 ```
-- Disk: up to about 42 GB in the output folder (about 12.5 GB coarse peak + about 17.5 GB deep part files + about 12 GB deep packs, which stay on disk until the final upload). The 30 GB default `--disk-cap-gb` would stop a deep run, so pass 45. The box had 56 GB free when this was written, so 45 plus `--min-free-gb 10` fits.
-- RAM: the cap is 4 GB; the box has 15 GB total and about 6 GB available. Pass 2 peak is estimated at about 2-2.5 GB for the largest order-4 sub-cell (about 16.8 M rows). The 2-partition test peaked at 0.96 GB.
-- Time: about 12-13 h for the passes and the write (the write pass already handles every row), plus extra time for writing deep part files and packs and for uploading about 13 GB to R2; neither has been measured, so allow about 14-16 h.
-- If it stops with exit 2 or 6, rerun the same command.
+- Disk: about 30-36 GB peak in the output folder (largest order-2 shard 6.1 GB, possibly twice that briefly, as the measured run peaked at about 2× its shard; candidates up to 4.9 GB; deep part files about 17.3 GB and deep packs about 7.4 GB at the measured bytes per record, both on disk at the end until upload). Keep `--disk-cap-gb 45` for headroom. With `--min-free-gb 15` the volume needs about 60 GB free at the start.
+- RAM: about 1.7-2 GB peak, since the largest partition (1,988,183 rows) and the densest sub-cell were inside the measured run. Use `--max-rss-gb 3`.
+- Time: pass 1 about 1-1.2 h, pass 2 downloads about 1.5 h, write pass about 12.7 h (1.81 B rows at the measured 25.3 microseconds per row), check about 15 min; about 15-16 h before upload. Upload of about 7.4 GB packs is unmeasured; allow 16-18 h.
+- If it stops with exit 2 or 6, rerun the same command. See "Recovery after tiles.json is on R2" above.
+
+## Memory tests
+
+Memory tests (`test_hats_memory.py`, 220 fake partitions with real payload sizes): pass 1 RSS grew 268.7 MB over 220 partitions with at most 4 cleaned partitions alive at once (keeping all would be about 3.2 GB, estimate); a RAM stop in pass 1 happened after 4 downloads and the resume gave identical thresholds; pass 2 RSS grew 12.5 MB over 220 partitions; a pass-2 stop happened after 4 downloads and the resume gave identical shards.
 
 ## Known gaps
 
-- HATS `--deep` and the upload path have only run on small test data with mocked R2. No full deep run and no real HATS upload have been done.
-- The full-sky disk, RAM and time figures are estimates from the 2-partition test and `_metadata` row counts. The largest order-2 cell (168.7 M rows) has not been exercised.
-- Pass 2 does not resume mid-pass; an interruption (including a RAM guard stop) repeats its downloads.
-- Upload is not resumable per object; a rerun after exit 7 re-uploads all packs.
-- Upload speed to R2 from the box has not been measured.
+- HATS `--deep` and the upload path have only run on small test data with mocked R2. No full deep run and no real HATS upload yet (only mocked R2 and local tests).
+- The full-sky disk, RAM and time figures are estimates scaled from one large cell.
+- Upload speed to R2 unmeasured.
+- The brief 2× disk peak in the large-cell run is not explained yet.
