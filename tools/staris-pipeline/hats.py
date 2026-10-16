@@ -179,7 +179,10 @@ def read_partition(url: str, workers: int = 8) -> Tuple[np.ndarray, Dict[str, An
             col = rg.column(c_idx)
             if col.path_in_schema not in COLUMNS:
                 continue
-            off = col.dictionary_page_offset if col.dictionary_page_offset is not None and col.dictionary_page_offset > 0 else col.data_page_offset
+            if col.has_dictionary_page:
+                off = col.dictionary_page_offset
+            else:
+                off = col.data_page_offset
             if off is not None and off > 0:
                 ranges.append((off, col.total_compressed_size))
 

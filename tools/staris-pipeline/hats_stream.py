@@ -5,6 +5,7 @@ keeps top HEAP_M candidates per order-6 cell in per-base cand/*.npz files.
 Pass 2 (iter_units): re-fetches only the home partitions for each order-2 unit in order,
 merges with stragglers, writes one .hatsx shard per unit, feeds to pyramid.run_stream.
 Peak disk usage is roughly one order-2 unit of raw rows plus small straggler/candidate files.
+When RSS passes rss_cap the run stops with pyramid.RssExceeded; pass 1 is checkpointed first, pass 2 restarts from its first unit.
 """
 
 import numpy as np
@@ -76,6 +77,7 @@ def scan(
     guard=None,
     progress=print,
     straggler_max=STRAGGLER_MAX,
+    rss_cap=None,
 ):
     keys = [f"{o}/{p}" for o, p in partitions]
     state_path = _scan_state_path(work_dir)
@@ -212,6 +214,16 @@ def scan(
                 if guard:
                     guard()
 
+            if rss_cap is not None:
+                rss = pyramid.rss_bytes()
+                if rss > rss_cap:
+                    for b in list(pending.keys()):
+                        if pending[b][0]:
+                            _merge_pending(b, pending[b], cand_dir, pyramid.HEAP_M)
+                            pending[b] = ([], [], [])
+                    _write_scan_state(state_path, sc)
+                    raise pyramid.RssExceeded(rss, rss_cap, state_path)
+
     for b in list(pending.keys()):
         if pending[b][0]:
             _merge_pending(b, pending[b], cand_dir, pyramid.HEAP_M)
@@ -290,6 +302,7 @@ def iter_units(
     progress=print,
     keep_files=False,
     stats=None,
+    rss_cap=None,
 ):
     if stats is None:
         stats = {}
@@ -369,6 +382,12 @@ def iter_units(
                     f.write(arr.tobytes())
                     n += len(arr)
                     dups_u += d
+                    del arr
+                    pieces = None
+                    if rss_cap is not None:
+                        rss = pyramid.rss_bytes()
+                        if rss > rss_cap:
+                            raise pyramid.RssExceeded(rss, rss_cap, f"pass 2 unit {u:03d}")
         stats["dups_global"] += dups_u
         stats["rows_out"] += n
         if n == 0:
@@ -386,6 +405,7 @@ def iter_units(
 
         info = pyramid.probe_shard(out_path, pyramid.ADAPTERS["hats"], 36)
         progress(f"unit {u:03d}: rows={n} fetched={len(need)}")
+        del strag_arr, strag_sub
         yield info
         if not keep_files:
             os.unlink(out_path)
@@ -404,6 +424,7 @@ def run(
     guard=None,
     progress=print,
     keep_files=False,
+    rss_cap=None,
 ):
     work_dir = os.path.join(out_dir, "hats_stream")
     cache_dir = os.path.join(out_dir, "hats_cache")
@@ -421,6 +442,7 @@ def run(
         range_workers=range_workers,
         guard=guard,
         progress=progress,
+        rss_cap=rss_cap,
     )
     progress("scan finished")
 
@@ -438,6 +460,7 @@ def run(
         progress=progress,
         keep_files=keep_files,
         stats=run_stats,
+        rss_cap=rss_cap,
     )
 
     pm = pyramid.run_stream(

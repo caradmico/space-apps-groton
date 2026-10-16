@@ -484,9 +484,20 @@ function cellSpan(held, meta) {
   return { start: pack.recordsAt + meta.start * recBytes, length: meta.count * recBytes };
 }
 
+const INFLATED_MAX = 256;
+
 async function inflateCells(held, metas) {
   if (!held.pack.g1b) return;
   if (!held.inflated) held.inflated = new Map();
+  const needed = new Set(metas.map((m) => m.local));
+  let excess = held.inflated.size - INFLATED_MAX;
+  for (const k of [...held.inflated.keys()]) {
+    if (excess <= 0) break;
+    if (!needed.has(k)) {
+      held.inflated.delete(k);
+      excess--;
+    }
+  }
   for (const meta of metas) {
     if (!meta.count || held.inflated.has(meta.local)) continue;
     const span = cellSpan(held, meta);
