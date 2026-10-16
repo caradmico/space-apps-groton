@@ -5,8 +5,10 @@ import io
 import os
 import json
 import time
-import urllib.request
-import urllib.error
+import random
+import urllib.parse
+import http.client
+import ssl
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple, Dict, Any
@@ -18,15 +20,126 @@ import pyarrow.compute as pc
 import dr3
 import tap
 
+
+CONNECT_TIMEOUT = float(os.environ.get("HATS_CONNECT_TIMEOUT", "20"))
+READ_TIMEOUT = float(os.environ.get("HATS_READ_TIMEOUT", "60"))
+REQUEST_DEADLINE = float(os.environ.get("HATS_REQUEST_DEADLINE", "300"))
+MAX_ATTEMPTS = int(os.environ.get("HATS_MAX_ATTEMPTS", "5"))
+BACKOFF_BASE = float(os.environ.get("HATS_BACKOFF_BASE", "2.0"))
+BACKOFF_MAX = float(os.environ.get("HATS_BACKOFF_MAX", "60"))
+
 HATS_BASE = "https://data.lsdb.io/hats/gaia_dr3/gaia/"
 COLUMNS = ["source_id", "ra", "dec", "parallax", "parallax_error",
            "phot_g_mean_mag", "bp_rp"]
 
 
+class HatsReadError(RuntimeError):
+    def __init__(self, url: str, what: str, attempts: int, last: Exception):
+        self.url = url
+        self.what = what
+        self.attempts = attempts
+        self.last = last
+        msg = f"{what} {url} failed after {attempts} attempts: {last!r}; rerun the same command to resume"
+        super().__init__(msg)
+
+
+class _Retryable(Exception):
+    pass
+
+
+def _http(url: str, method: str = "GET", headers: dict = None) -> tuple[int, dict, bytes]:
+    if headers is None:
+        headers = {}
+    headers = dict(headers)
+    headers.setdefault("User-Agent", "staris-pipeline")
+
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    path = parsed.path
+    if parsed.query:
+        path += "?" + parsed.query
+
+    start = time.monotonic()
+    deadline = start + REQUEST_DEADLINE
+
+    for hop in range(5):
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"request deadline {REQUEST_DEADLINE}s exceeded")
+
+        if parsed.scheme == "https":
+            conn = http.client.HTTPSConnection(
+                host, port, timeout=CONNECT_TIMEOUT, context=ssl.create_default_context()
+            )
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=CONNECT_TIMEOUT)
+
+        try:
+            conn.connect()
+            if conn.sock is not None:
+                conn.sock.settimeout(READ_TIMEOUT)
+
+            conn.request(method, path, headers=headers)
+            resp = conn.getresponse()
+
+            if resp.status in (301, 302, 303, 307, 308):
+                location = resp.getheader("Location")
+                if not location:
+                    raise http.client.HTTPException("redirect without Location")
+                url = urllib.parse.urljoin(url, location)
+                parsed = urllib.parse.urlsplit(url)
+                conn.close()
+                continue
+
+            status = resp.status
+            hdrs = dict(resp.getheaders())
+
+            if method == "HEAD":
+                body = b""
+            else:
+                body = []
+                while True:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(f"request deadline {REQUEST_DEADLINE}s exceeded")
+                    chunk = resp.read1(1 << 16)
+                    if not chunk:
+                        break
+                    body.append(chunk)
+                body = b"".join(body)
+
+            return status, hdrs, body
+        finally:
+            conn.close()
+
+    raise http.client.HTTPException("too many redirects")
+
+
+def _retry(what: str, url: str, fn):
+    last = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return fn()
+        except (OSError, http.client.HTTPException, TimeoutError, _Retryable) as e:
+            last = e
+            if attempt == MAX_ATTEMPTS:
+                break
+            backoff = min(BACKOFF_MAX, BACKOFF_BASE ** (attempt - 1))
+            time.sleep(backoff * random.uniform(0.5, 1.0))
+        except HatsReadError:
+            raise
+    raise HatsReadError(url, what, attempt, last) from last
+
+
 def partition_list(base: str = HATS_BASE) -> List[Tuple[int, int]]:
     url = base.rstrip("/") + "/partition_info.csv"
-    with urllib.request.urlopen(url) as resp:
-        lines = resp.read().decode("utf-8").strip().split("\n")
+    def get():
+        status, _, body = _http(url)
+        if status != 200:
+            if 500 <= status < 600 or status in (408, 429):
+                raise _Retryable(f"bad status {status}")
+            raise HatsReadError(url, "partition list", 1, RuntimeError(f"bad status {status}"))
+        return body.decode("utf-8").strip().split("\n")
+    lines = _retry("partition list", url, get)
     parts = []
     for line in lines[1:]:
         if line.strip():
@@ -51,9 +164,14 @@ class RangeFile(io.RawIOBase):
         self._lock = threading.Lock()
 
     def _get_size(self) -> int:
-        req = urllib.request.Request(self.url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return int(r.headers.get("Content-Length", 0))
+        def head():
+            status, hdrs, _ = _http(self.url, method="HEAD")
+            if status != 200:
+                if 500 <= status < 600 or status in (408, 429):
+                    raise _Retryable(f"bad status {status}")
+                raise HatsReadError(self.url, "HEAD", 1, RuntimeError(f"bad status {status}"))
+            return int(hdrs.get("Content-Length", 0))
+        return _retry("HEAD", self.url, head)
 
     def readable(self) -> bool:
         return True
@@ -74,30 +192,27 @@ class RangeFile(io.RawIOBase):
         return self.pos
 
     def _fetch(self, start: int, end: int) -> bytes:
-        for attempt in range(4):
-            try:
-                req = urllib.request.Request(
-                    self.url,
-                    headers={"Range": f"bytes={start}-{end-1}"},
-                    method="GET",
-                )
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    if r.status == 206 or (r.status == 200 and start == 0):
-                        data = r.read()
-                        got = len(data)
-                        want = end - start
-                        if got != want:
-                            raise urllib.error.URLError(f"short read {got}/{want}")
-                        with self._lock:
-                            self.n_requests += 1
-                            self.n_bytes += got
-                        return data
-                    raise urllib.error.URLError(f"bad status {r.status}")
-            except Exception:
-                if attempt == 3:
-                    raise
-                time.sleep(2**attempt)
-        raise RuntimeError("unreachable")
+        def get_range():
+            status, hdrs, body = _http(
+                self.url,
+                method="GET",
+                headers={"Range": f"bytes={start}-{end-1}"},
+            )
+            if status not in (206, 200) or (status == 200 and start != 0):
+                if 500 <= status < 600 or status in (408, 429):
+                    raise _Retryable(f"bad status {status}")
+                raise HatsReadError(self.url, f"range {start}-{end-1}", 1, RuntimeError(f"bad status {status}"))
+            got = len(body)
+            want = end - start
+            if got < want and not (status == 200 and start == 0 and got >= want):
+                raise _Retryable(f"short read {got}/{want}")
+            if status == 200 and start == 0:
+                body = body[:want]
+            with self._lock:
+                self.n_requests += 1
+                self.n_bytes += len(body)
+            return body
+        return _retry(f"range {start}-{end-1}", self.url, get_range)
 
     def prefetch(self, ranges: List[Tuple[int, int]], workers: int = 8) -> None:
         if not ranges:

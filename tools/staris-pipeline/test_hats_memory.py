@@ -687,3 +687,148 @@ def test_pass2_crash_at_each_finalize_step_resumes_byte_identical(monkeypatch, t
         passed.append(step_name)
 
     report("pass2_crash_steps", steps=passed)
+
+
+def test_resume_refuses_short_tmp(monkeypatch, tmp_path):
+    monkeypatch.setattr(pyramid, "HEAP_M", 64)
+    parts = [(5, p) for p in range(4)]
+    fake, _ = make_fake(20_000, 5)
+    monkeypatch.setattr(hats, "read_partition", fake)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    sc = hats_stream.scan(work_dir, parts, base="http://fake/", workers=4, range_workers=1, progress=lambda m: None)
+
+    real_atomic = hats_stream._atomic_write_json
+
+    def wrap_atomic_write_json(path, obj):
+        real_atomic(path, obj)
+        if obj.get("unit") == 0 and obj.get("next") == 10:
+            raise OSError(errno.ENOSPC, "injected")
+        return None
+
+    with monkeypatch.context() as m:
+        m.setattr(hats_stream, "_atomic_write_json", wrap_atomic_write_json)
+        with pytest.raises(OSError):
+            for _ in hats_stream.iter_units(
+                work_dir,
+                work_dir / "cache",
+                sc,
+                base="http://fake/",
+                workers=4,
+                range_workers=1,
+                progress=lambda m: None,
+                keep_files=True,
+            ):
+                pass
+
+    finalize_path = work_dir / "finalize.json"
+    with open(finalize_path) as f:
+        fin = json.load(f)
+    tmp_size = fin["tmp_size"]
+    assert tmp_size > 36
+    tmp_file = work_dir / "cache" / "GaiaSource_hats_o2_000.hatsx.tmp"
+    with open(tmp_file, "ab") as f:
+        f.truncate(tmp_size - 36)
+
+    sc = hats_stream.scan(work_dir, parts, base="http://fake/", workers=4, range_workers=1, progress=lambda m: None)
+    with pytest.raises(RuntimeError, match="refusing to resume"):
+        for _ in hats_stream.iter_units(
+            work_dir,
+            work_dir / "cache",
+            sc,
+            base="http://fake/",
+            workers=4,
+            range_workers=1,
+            progress=lambda m: None,
+            keep_files=True,
+        ):
+            pass
+    assert not (work_dir / "cache" / "GaiaSource_hats_o2_000.hatsx").exists()
+
+
+def test_resume_refuses_adopting_wrong_size_shard(monkeypatch, tmp_path):
+    monkeypatch.setattr(pyramid, "HEAP_M", 64)
+    parts = [(5, p) for p in range(4)]
+    fake, _ = make_fake(20_000, 5)
+    monkeypatch.setattr(hats, "read_partition", fake)
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    sc = hats_stream.scan(work_dir, parts, base="http://fake/", workers=4, range_workers=1, progress=lambda m: None)
+
+    real_write_state = hats_stream._write_pass2_state
+
+    def wrap_write_state(path, state):
+        if 0 in state.get("ready", []):
+            raise OSError(errno.ENOSPC, "injected")
+        return real_write_state(path, state)
+
+    with monkeypatch.context() as m:
+        m.setattr(hats_stream, "_write_pass2_state", wrap_write_state)
+        with pytest.raises(OSError):
+            for _ in hats_stream.iter_units(
+                work_dir,
+                work_dir / "cache",
+                sc,
+                base="http://fake/",
+                workers=4,
+                range_workers=1,
+                progress=lambda m: None,
+                keep_files=True,
+            ):
+                pass
+
+    shard_path = work_dir / "cache" / "GaiaSource_hats_o2_000.hatsx"
+    assert shard_path.exists()
+    tmp_file = work_dir / "cache" / "GaiaSource_hats_o2_000.hatsx.tmp"
+    assert not tmp_file.exists()
+
+    with open(shard_path, "ab") as f:
+        f.write(b"\0" * 36)
+    orig_sha = file_sha256(shard_path)
+    orig_size = shard_path.stat().st_size
+
+    sc = hats_stream.scan(work_dir, parts, base="http://fake/", workers=4, range_workers=1, progress=lambda m: None)
+    with pytest.raises(RuntimeError, match="refusing to adopt or rebuild"):
+        for _ in hats_stream.iter_units(
+            work_dir,
+            work_dir / "cache",
+            sc,
+            base="http://fake/",
+            workers=4,
+            range_workers=1,
+            progress=lambda m: None,
+            keep_files=True,
+        ):
+            pass
+    assert shard_path.stat().st_size == orig_size
+    assert file_sha256(shard_path) == orig_sha
+
+
+def test_cli_refuses_missing_thresholds(hats_server, monkeypatch, tmp_path):
+    url, tmp, *_ = hats_server
+    base = url + "/"
+    out = tmp_path / "out"
+    argv = base_argv(out, base, tmp_path, "--coarse", "--deep", "--prefix", "probe/")
+
+    calls = {"n": 0}
+    real_check = pyramid.check_rss
+
+    def stop_first(cap, checkpoint):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise pyramid.RssExceeded(10**12, 1, "test")
+        return real_check(cap, checkpoint)
+
+    monkeypatch.setattr(pyramid, "check_rss", stop_first)
+    ret, _, _, _ = run_cli(argv, monkeypatch, cap=1, heap_m=7)
+    assert ret == 6
+
+    monkeypatch.setattr(pyramid, "check_rss", real_check)
+    thresholds_path = out / "hats_stream" / "thresholds.npz"
+    assert thresholds_path.exists()
+    thresholds_path.unlink()
+
+    with pytest.raises(RuntimeError, match="refusing to build with empty thresholds"):
+        run_cli(argv, monkeypatch, cap=1, heap_m=7)

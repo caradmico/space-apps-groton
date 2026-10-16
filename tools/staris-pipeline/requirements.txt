@@ -1,6 +1,8 @@
 # pyarrow only needed for --source hats
 numpy
 pyarrow>=14
+# needed for --upload (R2 via the S3 API)
+boto3
 
 # test dependencies
 pytest

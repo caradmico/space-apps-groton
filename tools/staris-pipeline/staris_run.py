@@ -10,6 +10,7 @@ from pathlib import Path
 import tap
 import pyramid
 import deep
+import hats
 from r2_upload import make_sink, upload_file, object_exists
 
 
@@ -177,6 +178,9 @@ def main():
             except pyramid.RssExceeded as e:
                 log(f"RSS guard stop: {e}. Checkpoint saved; rerun the same command to resume")
                 sys.exit(6)
+            except hats.HatsReadError as e:
+                log(f"REMOTE READ FAILED: {e}. Checkpoint saved; rerun the same command to resume")
+                sys.exit(8)
             v = pyr_manifest.get("verify", {})
             rows_in = sum(int(s.get("n", 0)) for s in pyr_manifest.get("shards", []))
             deep_rows = sum(int(x) for x in pyr_manifest.get('deep_counts', {}).values())
@@ -342,6 +346,9 @@ if __name__ == "__main__":
     except tap.DiskFull as e:
         print(f"DiskFull: {e}")
         sys.exit(2)
+    except hats.HatsReadError as e:
+        print(f"REMOTE READ FAILED: {e}")
+        sys.exit(8)
     except Exception as e:
         print(f"ERROR: {e}")
         sys.exit(1)

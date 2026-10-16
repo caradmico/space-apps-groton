@@ -10,6 +10,7 @@ import numpy as np
 import json
 import os
 import shutil
+import warnings
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import io
 
@@ -282,6 +283,11 @@ def scan(
             strag_arr = s_unit = c_arr = c_sid = base_cell = local = mag_f32 = sid64 = None
             del arr, sid, unit, uniq, counts, plan_entry
             del strag_arr, s_unit, c_arr, c_sid, base_cell, local, mag_f32, sid64
+    except hats.HatsReadError:
+        _merge_all_pending(pending, cand_dir)
+        pending_rows = 0
+        _write_scan_state(state_path, sc)
+        raise
     finally:
         gen.close()
 
@@ -331,8 +337,8 @@ def _fsync_dir(path):
             os.fsync(fd)
         finally:
             os.close(fd)
-    except OSError:
-        pass
+    except OSError as e:
+        warnings.warn(f"fsync of directory {path} failed: {e!r}", RuntimeWarning)
 
 
 def _write_scan_state(path, sc):
@@ -559,6 +565,13 @@ def iter_units(
             expected = fin.get("tmp_size")
             if os.path.exists(tmp_path):
                 # a
+                got = os.path.getsize(tmp_path)
+                if got < expected:
+                    raise RuntimeError(
+                        f"unit {u:03d}: {tmp_path} is {got} bytes but finalize.json recorded "
+                        f"tmp_size={expected} (a crash lost appended data); refusing to resume. "
+                        "Delete hats_stream/pass2.json and hats_stream/finalize.json to redo pass 2."
+                    )
                 with open(tmp_path, "r+b") as f:
                     f.truncate(expected)
                     f.seek(0, 2)
@@ -579,9 +592,10 @@ def iter_units(
                     progress(f"unit {u:03d}: adopted finished shard after interrupted rename")
                 else:
                     raise RuntimeError(
-                        f"unit {u:03d}: finalize.json says next={fin.get('next')} n={fin.get('n')} "
-                        f"but the .tmp is missing; refusing to rebuild over existing data. "
-                        f"Delete hats_stream/pass2.json and hats_stream/finalize.json to redo pass 2."
+                        f"unit {u:03d}: finished shard {out_path} is {got} bytes but finalize.json "
+                        f"expects tmp_size={expected} (n={fin.get('n')} rows x 36 = "
+                        f"{(fin.get('n') or 0) * 36}); refusing to adopt or rebuild it. "
+                        "Delete hats_stream/pass2.json and hats_stream/finalize.json to redo pass 2."
                     )
             elif fin.get("next") == 256 and fin.get("n") == 0 and not os.path.exists(out_path):
                 # c
@@ -600,8 +614,8 @@ def iter_units(
             # e
             if os.path.exists(out_path) and u not in state.get("ready", []):
                 raise RuntimeError(
-                    f"unit {u:03d}: out_path already exists for a unit that is not in ready; "
-                    "refusing to overwrite. Delete hats_stream/pass2.json to redo pass 2."
+                    f"unit {u:03d}: {out_path} already exists for a unit that is not in ready; "
+                    "refusing to overwrite. Delete hats_stream/pass2.json and hats_stream/finalize.json to redo pass 2."
                 )
             n = 0
             dups_u = 0
@@ -632,6 +646,7 @@ def iter_units(
                     arr, d = hats.clean(np.concatenate(pieces))
                     with open(tmp_path, "ab") as f:
                         f.write(arr.tobytes())
+                        os.fsync(f.fileno())
                     n += len(arr)
                     dups_u += d
                     del arr
@@ -750,17 +765,31 @@ def run(
     progress("scan finished")
 
     thresh_path = os.path.join(work_dir, "thresholds.npz")
-    if sc.get("thresholds_file") and os.path.exists(thresh_path):
+    cand = os.path.join(work_dir, "cand")
+    if sc.get("thresholds_file"):
+        if not os.path.exists(thresh_path):
+            raise RuntimeError(
+                f"{thresh_path} is missing but scan.json says pass 1 finished and saved it; "
+                "refusing to build with empty thresholds (0 coarse stars). "
+                "Delete hats_stream/scan.json to redo pass 1."
+            )
         state = pyramid._load_state(thresh_path)
     else:
+        if not os.path.exists(cand):
+            raise RuntimeError(
+                f"{cand} is missing and no thresholds.npz was saved; "
+                "refusing to build with empty thresholds. "
+                "Delete hats_stream/scan.json to redo pass 1."
+            )
         state = thresholds(work_dir)
         tmp = os.path.join(work_dir, "thresholds.tmp.npz")
         pyramid._save_state(tmp, state)
+        with open(tmp, "rb") as f:
+            os.fsync(f.fileno())
         os.replace(tmp, thresh_path)
         _fsync_dir(work_dir)
         sc["thresholds_file"] = "thresholds.npz"
         _write_scan_state(_scan_state_path(work_dir), sc)
-        cand = os.path.join(work_dir, "cand")
         if os.path.exists(cand):
             shutil.rmtree(cand)
 
