@@ -77,7 +77,7 @@ Real large cell (24 real HATS partitions inside order-2 cell 112, 30,661,736 row
 ## Full-run estimates
 
 **Estimates (scaled from the measured large-cell run; not measured on the full sky):**
-- RAM: about 1.7-2 GB peak, since the largest partition (1,988,183 rows) and the densest sub-cell were inside the measured run. Use `--max-rss-gb 3`.
+- RAM: about 1.7-2 GB peak, since the measured run included the densest order-4 sub-cell and partitions up to 1,939,635 rows (the largest partition anywhere has 1,988,183 rows). Use `--max-rss-gb 3`.
 - Disk: about 30-36 GB peak in the output folder (largest order-2 shard 6.1 GB, possibly twice that briefly, as the measured run peaked at about 2× its shard; candidates up to 4.9 GB; deep part files about 17.3 GB and deep packs about 7.4 GB at the measured bytes per record, both on disk at the end until upload). Keep `--disk-cap-gb 45` for headroom. With `--min-free-gb 15` the volume needs about 60 GB free at the start.
 - Time: pass 1 about 1-1.2 h, pass 2 downloads about 1.5 h, write pass about 12.7 h (1.81 B rows at the measured 25.3 microseconds per row), check about 15 min; about 15-16 h before upload. Upload of about 7.4 GB packs is unmeasured; allow 16-18 h.
 
@@ -88,7 +88,7 @@ python3 staris_run.py --source hats --coarse --deep --upload --prefix auto \
   --out /path/to/staris-hats-full --max-rss-gb 3 --disk-cap-gb 45 --min-free-gb 15
 ```
 - Disk: about 30-36 GB peak in the output folder (largest order-2 shard 6.1 GB, possibly twice that briefly, as the measured run peaked at about 2× its shard; candidates up to 4.9 GB; deep part files about 17.3 GB and deep packs about 7.4 GB at the measured bytes per record, both on disk at the end until upload). Keep `--disk-cap-gb 45` for headroom. With `--min-free-gb 15` the volume needs about 60 GB free at the start.
-- RAM: about 1.7-2 GB peak, since the largest partition (1,988,183 rows) and the densest sub-cell were inside the measured run. Use `--max-rss-gb 3`.
+- RAM: about 1.7-2 GB peak, since the measured run included the densest order-4 sub-cell and partitions up to 1,939,635 rows (the largest partition anywhere has 1,988,183 rows). Use `--max-rss-gb 3`.
 - Time: pass 1 about 1-1.2 h, pass 2 downloads about 1.5 h, write pass about 12.7 h (1.81 B rows at the measured 25.3 microseconds per row), check about 15 min; about 15-16 h before upload. Upload of about 7.4 GB packs is unmeasured; allow 16-18 h.
 - If it stops with exit 2 or 6, rerun the same command. See "Recovery after tiles.json is on R2" above.
 
