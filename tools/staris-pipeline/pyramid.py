@@ -653,30 +653,54 @@ def run_stream(config, state, shard_iter, progress=print):
     if manifest and manifest.get("pass") == "done" and manifest.get("streamed"):
         return manifest
 
-    os.makedirs(output_dir, exist_ok=True)
-    for d in ("parts", "packs"):
-        p = os.path.join(output_dir, d)
-        if os.path.isdir(p):
-            shutil.rmtree(p)
-
-    manifest = {
-        "version": 1,
-        "adapter": adapter_name,
-        "mode": config.get("mode", "PILOT"),
-        "write_deep": write_deep,
-        "rec_size": rec_size,
-        "cap": CAP,
-        "pass": "write",
-        "shards": [],
-        "aborted": None,
-        "streamed": True,
-        "closed_bases": sorted(int(b) for b in state["closed_bases"]),
-        "coarse_counts": {str(k): int(state["counts"][k].sum()) for k in COARSE_ORDERS},
-    }
-    _save_state(os.path.join(output_dir, "thresholds.npz"), state)
-    save_manifest(output_dir, manifest)
-
     q8 = load_q8()
+
+    ckpt = _resumable_ckpt(output_dir, config)
+    resume = None
+    if ckpt is not None:
+        resume = ckpt
+        part_dir = os.path.join(output_dir, "parts")
+        if os.path.isdir(part_dir):
+            for name in os.listdir(part_dir):
+                if name.endswith(".tmp"):
+                    os.unlink(os.path.join(part_dir, name))
+                elif name.endswith(".part"):
+                    try:
+                        idx = int(name.rsplit("_", 1)[-1][:-5])
+                        if idx >= resume["part_index"]:
+                            os.unlink(os.path.join(part_dir, name))
+                    except (ValueError, IndexError):
+                        pass
+        packs_dir = os.path.join(output_dir, "packs")
+        if os.path.isdir(packs_dir):
+            shutil.rmtree(packs_dir)
+        manifest["shards"] = list(resume["shards"])
+        manifest["aborted"] = None
+        save_manifest(output_dir, manifest)
+        progress(f"resuming write pass after {len(resume['shards'])} shards")
+    else:
+        os.makedirs(output_dir, exist_ok=True)
+        for d in ("parts", "packs"):
+            p = os.path.join(output_dir, d)
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+        manifest = {
+            "version": 1,
+            "adapter": adapter_name,
+            "mode": config.get("mode", "PILOT"),
+            "write_deep": write_deep,
+            "rec_size": rec_size,
+            "cap": CAP,
+            "pass": "write",
+            "shards": [],
+            "aborted": None,
+            "streamed": True,
+            "closed_bases": sorted(int(b) for b in state["closed_bases"]),
+            "coarse_counts": {str(k): int(state["counts"][k].sum()) for k in COARSE_ORDERS},
+        }
+        _save_state(os.path.join(output_dir, "thresholds.npz"), state)
+        save_manifest(output_dir, manifest)
+        clear_stream_ckpt(output_dir)
 
     def gen():
         for info in shard_iter:
@@ -684,7 +708,19 @@ def run_stream(config, state, shard_iter, progress=print):
             yield info
 
     try:
-        _write_pass(config, adapter, gen(), state, q8, manifest, cap, progress, rec_size)
+        _write_pass(
+            config,
+            adapter,
+            gen(),
+            state,
+            q8,
+            manifest,
+            cap,
+            progress,
+            rec_size,
+            stream=True,
+            resume=resume,
+        )
         manifest["pass"] = "verify"
         save_manifest(output_dir, manifest)
 
@@ -694,6 +730,7 @@ def run_stream(config, state, shard_iter, progress=print):
         manifest["aborted"] = None
         save_manifest(output_dir, manifest)
         progress("verify " + json.dumps(report))
+        clear_stream_ckpt(output_dir)
         return manifest
     except RssExceeded as exc:
         manifest["aborted"] = "rss"
@@ -701,6 +738,72 @@ def run_stream(config, state, shard_iter, progress=print):
         manifest["checkpoint"] = exc.checkpoint
         save_manifest(output_dir, manifest)
         raise
+
+
+def _stream_ckpt_path(output_dir):
+    return os.path.join(output_dir, "stream_ckpt.json")
+
+
+def _load_stream_ckpt(output_dir):
+    path = _stream_ckpt_path(output_dir)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        if state.get("version") != 1:
+            return None
+        ckpt = {
+            "version": 1,
+            "adapter": state["adapter"],
+            "write_deep": state["write_deep"],
+            "pack_format": state["pack_format"],
+            "shards": state["shards"],
+            "part_index": state["part_index"],
+            "pass2_counts": {int(k): v for k, v in state["pass2_counts"].items()},
+            "pass2_with_distance": state["pass2_with_distance"],
+            "deep_counts": {int(k): v for k, v in state["deep_counts"].items()},
+            "hash_sum": state["hash_sum"],
+            "hash_xor": state["hash_xor"],
+            "hash_count": state["hash_count"],
+            "sample": {int(k): v for k, v in state["sample"].items()},
+            "rng": state["rng"],
+        }
+        return ckpt
+    except Exception:
+        return None
+
+
+def _resumable_ckpt(output_dir, config):
+    manifest = load_manifest(output_dir)
+    if not manifest or not manifest.get("streamed"):
+        return None
+    p = manifest.get("pass")
+    if p not in ("write", "verify"):
+        return None
+    ckpt = _load_stream_ckpt(output_dir)
+    if not ckpt:
+        return None
+    if (
+        ckpt.get("adapter") != config.get("adapter", "hats")
+        or ckpt.get("write_deep") != bool(config.get("write_deep", False))
+        or ckpt.get("pack_format") != config.get("pack_format", "q10")
+    ):
+        return None
+    return ckpt
+
+
+def stream_done_shards(output_dir, config=None):
+    ckpt = _resumable_ckpt(output_dir, config) if config is not None else None
+    if not ckpt:
+        return set()
+    return {info["name"] for info in ckpt["shards"]}
+
+
+def clear_stream_ckpt(output_dir):
+    path = _stream_ckpt_path(output_dir)
+    if os.path.isfile(path):
+        os.unlink(path)
 
 
 def _run_passes(config, manifest, paths, adapter, output_dir, cap, progress, q8, rec_size=62):
@@ -834,13 +937,43 @@ def _read_parts(part_dir):
     return grouped
 
 
-def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec_size=62):
+def _index_parts(part_dir):
+    if not os.path.isdir(part_dir):
+        return [], []
+    names = [n for n in sorted(os.listdir(part_dir)) if n.endswith(".part")]
+    import array
+    order_col = array.array("q")
+    pack_col = array.array("q")
+    local_col = array.array("q")
+    file_col = array.array("q")
+    offset_col = array.array("q")
+    count_col = array.array("q")
+    for file_no, name in enumerate(names):
+        path = os.path.join(part_dir, name)
+        with open(path, "rb") as f:
+            order, n_cells = struct.unpack("<II", f.read(8))
+            for _ in range(n_cells):
+                cell, count = struct.unpack("<II", f.read(8))
+                off = f.tell()
+                f.seek(count * REC_OUT, 1)
+                pack_id, _, local = _pack_key(order, cell)
+                order_col.append(order)
+                pack_col.append(pack_id)
+                local_col.append(local)
+                file_col.append(file_no)
+                offset_col.append(off)
+                count_col.append(count)
+    return names, (order_col, pack_col, local_col, file_col, offset_col, count_col)
+
+
+def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec_size=62, stream=False, resume=None):
     output_dir = config["output_dir"]
     write_deep = bool(config.get("write_deep", False))
     fmt = config.get("pack_format", "q10")
     manifest["pack_format"] = fmt
     part_dir = os.path.join(output_dir, "parts")
     os.makedirs(part_dir, exist_ok=True)
+    guard = config.get("guard")
     rng = np.random.default_rng(7)
     sample = {order: {"seen": 0, "rows": []} for order in list(COARSE_ORDERS) + list(DEEP_ORDERS)}
     pass2_counts = {order: 0 for order in list(COARSE_ORDERS) + list(DEEP_ORDERS)}
@@ -848,8 +981,18 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec
     hsum = np.zeros_like(state["hash_sum"])
     hxor = np.zeros_like(state["hash_xor"])
     hcount = np.zeros_like(state["hash_count"])
-    deep_counts = {order: {} for order in DEEP_ORDERS}
+    deep_counts = {order: 0 for order in DEEP_ORDERS}
     part_index = 0
+    if resume is not None:
+        part_index = resume["part_index"]
+        pass2_counts = resume["pass2_counts"]
+        pass2_with_distance = resume["pass2_with_distance"]
+        deep_counts = resume["deep_counts"]
+        hsum = np.array(resume["hash_sum"], dtype=state["hash_sum"].dtype)
+        hxor = np.array(resume["hash_xor"], dtype=state["hash_xor"].dtype)
+        hcount = np.array(resume["hash_count"], dtype=state["hash_count"].dtype)
+        sample = resume["sample"]
+        rng.bit_generator.state = resume["rng"]
 
     def remember(order, block, encoded):
         for i in range(min(block.shape[0], encoded.shape[0])):
@@ -896,7 +1039,7 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec
         counts, written = split_deep(chunk, write_deep, q8)
         for order, cells in counts.items():
             for cell, count in cells.items():
-                deep_counts[order][cell] = deep_counts[order].get(cell, 0) + count
+                deep_counts[order] = deep_counts.get(order, 0) + count
                 pass2_counts[order] += count
         if write_deep:
             for order, cells in written.items():
@@ -941,48 +1084,131 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec
                 hxor[o6] = np.bitwise_xor(np.uint64(hxor[o6]), np.uint64(sid))
                 hcount[o6] += 1
                 store.setdefault((order, int(cell_of(sid, order))), []).append(row.copy())
-        rss = check_rss(cap, part_dir)
-        manifest["rss"] = rss
-        progress(f"write {info['name']} rss={rss}")
-    flush_deep()
-    flush_unit(cur_unit, store)
-
-    grouped = _read_parts(part_dir)
-    pack_dir = os.path.join(output_dir, "packs")
-    os.makedirs(pack_dir, exist_ok=True)
-    levels = []
-    total_records = 0
-    total_bytes = 0
-    for (order, pack_id), locals_map in sorted(grouped.items()):
-        merged = []
-        for local, pieces in locals_map.items():
-            encoded = np.concatenate(pieces, axis=0)
-            mags = encoded[:, 6]
-            encoded = encoded[np.argsort(mags, kind="stable")]
-            merged.append((local, encoded))
-        if order <= 4:
-            parent = 255
-        elif order == 5:
-            parent = 0
-        elif order == 6:
-            parent = 1
-        else:
-            parent = order - 5
-        name = f"o{order}_p{pack_id}.pack"
-        nrec, nbytes = write_pack(os.path.join(pack_dir, name), order, parent, merged, fmt)
-        total_records += nrec
-        total_bytes += nbytes
-        levels.append(
-            {
-                "order": int(order),
-                "host": "pages",
-                "pack": name,
-                "pack_parent_order": int(parent),
-                "pack_id": int(pack_id),
-                "n": int(nrec),
-                "bytes": int(nbytes),
+        if stream:
+            flush_deep()
+            flush_unit(cur_unit, store)
+            cur_o6 = None
+            cur_unit = None
+            ckpt = {
+                "version": 1,
+                "adapter": manifest["adapter"],
+                "write_deep": write_deep,
+                "pack_format": fmt,
+                "shards": manifest["shards"],
+                "part_index": part_index,
+                "pass2_counts": {str(k): int(v) for k, v in pass2_counts.items()},
+                "pass2_with_distance": pass2_with_distance,
+                "deep_counts": {str(k): int(v) for k, v in deep_counts.items()},
+                "hash_sum": hsum.tolist(),
+                "hash_xor": hxor.tolist(),
+                "hash_count": hcount.tolist(),
+                "sample": {str(order): {"seen": s["seen"], "rows": s["rows"]} for order, s in sample.items()},
+                "rng": rng.bit_generator.state,
             }
-        )
+            ckpt_path = _stream_ckpt_path(output_dir)
+            tmp = ckpt_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(ckpt, f, separators=(",", ":"))
+            os.replace(tmp, ckpt_path)
+            if guard:
+                guard()
+            rss = check_rss(cap, part_dir)
+            manifest["rss"] = rss
+            progress(f"write {info['name']} rss={rss}")
+        else:
+            rss = check_rss(cap, part_dir)
+            manifest["rss"] = rss
+            progress(f"write {info['name']} rss={rss}")
+            if guard:
+                guard()
+    if not stream:
+        flush_deep()
+        flush_unit(cur_unit, store)
+
+    if guard:
+        guard()
+    pack_bytes_since_guard = 0
+    names, columns = _index_parts(part_dir)
+    if names:
+        order_arr = np.array(columns[0], dtype=np.int64)
+        pack_arr = np.array(columns[1], dtype=np.int64)
+        local_arr = np.array(columns[2], dtype=np.int64)
+        file_arr = np.array(columns[3], dtype=np.int64)
+        offset_arr = np.array(columns[4], dtype=np.int64)
+        count_arr = np.array(columns[5], dtype=np.int64)
+        idx = np.lexsort((pack_arr, order_arr))
+        pack_dir = os.path.join(output_dir, "packs")
+        os.makedirs(pack_dir, exist_ok=True)
+        levels = []
+        total_records = 0
+        total_bytes = 0
+        i = 0
+        n = len(idx)
+        while i < n:
+            part_files = {}
+            try:
+                start = i
+                cur_order = int(order_arr[idx[i]])
+                cur_pack = int(pack_arr[idx[i]])
+                while i < n and order_arr[idx[i]] == cur_order and pack_arr[idx[i]] == cur_pack:
+                    i += 1
+                # build locals_map in stable order of first appearance
+                locals_map = {}
+                for k in range(start, i):
+                    pos = idx[k]
+                    local = int(local_arr[pos])
+                    if local not in locals_map:
+                        locals_map[local] = []
+                    fno = int(file_arr[pos])
+                    name = names[fno]
+                    if name not in part_files:
+                        part_files[name] = open(os.path.join(part_dir, name), "rb")
+                    f = part_files[name]
+                    f.seek(int(offset_arr[pos]))
+                    raw = np.frombuffer(f.read(int(count_arr[pos]) * REC_OUT), dtype=np.uint8).copy().reshape(int(count_arr[pos]), REC_OUT)
+                    locals_map[local].append(raw)
+                merged = []
+                for local, pieces in locals_map.items():
+                    encoded = np.concatenate(pieces, axis=0)
+                    mags = encoded[:, 6]
+                    encoded = encoded[np.argsort(mags, kind="stable")]
+                    merged.append((local, encoded))
+                if cur_order <= 4:
+                    parent = 255
+                elif cur_order == 5:
+                    parent = 0
+                elif cur_order == 6:
+                    parent = 1
+                else:
+                    parent = cur_order - 5
+                name = f"o{cur_order}_p{cur_pack}.pack"
+                nrec, nbytes = write_pack(os.path.join(pack_dir, name), cur_order, parent, merged, fmt)
+                total_records += nrec
+                total_bytes += nbytes
+                levels.append(
+                    {
+                        "order": cur_order,
+                        "host": "pages",
+                        "pack": name,
+                        "pack_parent_order": parent,
+                        "pack_id": cur_pack,
+                        "n": nrec,
+                        "bytes": nbytes,
+                    }
+                )
+                pack_bytes_since_guard += nbytes
+                if pack_bytes_since_guard >= 256 * 1024 * 1024:
+                    if guard:
+                        guard()
+                    pack_bytes_since_guard = 0
+            finally:
+                for f in part_files.values():
+                    f.close()
+    else:
+        levels = []
+        total_records = 0
+        total_bytes = 0
+
     sample_path = os.path.join(output_dir, "samples.json")
     serial = {str(order): rows["rows"] for order, rows in sample.items() if rows["rows"]}
     with open(sample_path, "w", encoding="utf-8") as handle:
@@ -991,7 +1217,7 @@ def _write_pass(config, adapter, shards, state, q8, manifest, cap, progress, rec
     manifest["pass2_counts"] = {str(k): int(v) for k, v in pass2_counts.items()}
     manifest["pass2_with_distance"] = int(pass2_with_distance)
     manifest["distance_stats"] = {"pass2_with_distance": int(pass2_with_distance)}
-    manifest["deep_counts"] = {str(order): int(sum(cells.values())) for order, cells in deep_counts.items()}
+    manifest["deep_counts"] = {str(order): int(v) for order, v in deep_counts.items()}
     manifest["levels"] = levels
     manifest["total_records"] = int(total_records)
     manifest["total_bytes"] = int(total_bytes)
