@@ -5,6 +5,7 @@
 
 import { decodeQ8, decodeQ10, Q8_BYTES, Q10_BYTES } from "../scripts/q8.js";
 import { G1B_MAGIC, parseG1bHeader, inflateCell, checkG1bBounds } from "../scripts/g1b.js";
+import { InflatedCache } from "./inflated-cache.js";
 import { ang2pixNest, children, pix2vecNest } from "./healpix.js";
 
 let THREE = null;
@@ -484,9 +485,24 @@ function cellSpan(held, meta) {
   return { start: pack.recordsAt + meta.start * recBytes, length: meta.count * recBytes };
 }
 
+const INFLATED_MAX = 256;
+
+function pinInflated(held, metas) {
+  if (!held.pack.g1b) return null;
+  if (!held.inflated) held.inflated = new InflatedCache(INFLATED_MAX);
+  const keys = metas.map((m) => m.local);
+  held.inflated.pin(keys);
+  return keys;
+}
+
+function unpinInflated(held, keys) {
+  if (!keys || !held.inflated) return;
+  held.inflated.unpin(keys);
+  held.inflated.trim();
+}
+
 async function inflateCells(held, metas) {
   if (!held.pack.g1b) return;
-  if (!held.inflated) held.inflated = new Map();
   for (const meta of metas) {
     if (!meta.count || held.inflated.has(meta.local)) continue;
     const span = cellSpan(held, meta);
@@ -551,13 +567,19 @@ async function loadCells(group) {
       if (!parsed.incomplete) held.pack = parsed;
     }
   }
-  await inflateCells(held, pieces.map(p => p.meta));
-  for (const piece of pieces) {
-    if (!piece.meta.count) continue;
-    const entry = decodeCell(held, level, piece.local);
-    if (!entry) throw new Error(`${held.url} cell ${piece.local} not in loaded ranges`);
-    markHidden(entry);
-    touch(entry);
+  const metas = pieces.map(p => p.meta);
+  const pinned = pinInflated(held, metas);
+  try {
+    await inflateCells(held, metas);
+    for (const piece of pieces) {
+      if (!piece.meta.count) continue;
+      const entry = decodeCell(held, level, piece.local);
+      if (!entry) throw new Error(`${held.url} cell ${piece.local} not in loaded ranges`);
+      markHidden(entry);
+      touch(entry);
+    }
+  } finally {
+    unpinInflated(held, pinned);
   }
 }
 
@@ -1175,10 +1197,15 @@ export async function startV2() {
   const order0 = { order: 0, pack: "o0_p0.pack", pack_id: 0, pack_parent_order: -1 };
   const held0 = holdFull(order0, order0Res.url || order0Url, order0Bytes);
   state.packs.set(order0Url, held0);
-  await inflateCells(held0, held0.pack.cells);
-  for (const cell of held0.pack.cells) {
-    const entry = decodeCell(held0, order0, cell.local);
-    if (entry) touch(entry);
+  const pinned0 = pinInflated(held0, held0.pack.cells);
+  try {
+    await inflateCells(held0, held0.pack.cells);
+    for (const cell of held0.pack.cells) {
+      const entry = decodeCell(held0, order0, cell.local);
+      if (entry) touch(entry);
+    }
+  } finally {
+    unpinInflated(held0, pinned0);
   }
   paintOrder0Now();
   const indexRes = await indexPromise;
