@@ -19,11 +19,15 @@
  * Otherwise RA/Dec → Cartesian (parallax distance, else fixed-radius sphere).
  *
  * LOD:
- *   FAR  — stride-sample generalized points (one GPU buffer)
- *   NEAR — bounded accurate subset around the camera target (typed arrays only)
+ *   FAR  — every loaded tile star in one preallocated GPU buffer (brightness-scaled size/colour),
+ *          written in chunks with frame yields and partial uploads; the 12,288-star preview.bin
+ *          paints first in its own layer and hides once all tiles are in
+ *   NEAR — bounded subset (cap 12,288) around the orbit target, re-centred on the star nearest
+ *          the screen centre if the target region is empty
+ *   HYG  — data/hyg-near.bin, the 7,999 nearest named/real-distance stars, fading in near the
+ *          Sun, and Gaia records inside its max distance are skipped
  *
- * Tiles stream in. The first tile that arrives is sampled and drawn immediately.
- * Later tiles append into the same buffers and spatial indexes — no reload.
+ * Tiles still stream two at a time in look order and append without reload.
  */
 
 import * as THREE from "three";
@@ -50,6 +54,26 @@ const NEAR_EXIT = 44;
 const NEAR_RADIUS = 14;
 const GRID = 20;
 const YIELD_EVERY = 8000;
+
+const PREVIEW_BUDGET = 12288;
+
+const FAR_INGEST_CHUNK = 16384;
+
+const FAR_SIZE_SCALE = 0.5;
+
+const HYG_FILE = "data/hyg-near.bin";
+
+const HYG_FADE_NEAR = 160;
+
+const HYG_FADE_FAR = 260;
+
+const HYG_LABEL_MAG = 2.5;
+
+const HYG_LABEL_NEAR_PC = 12;
+
+const HYG_LABEL_MAX = 24;
+
+const hyg = { cutoffPc: 0, n: 0, maxDistPc: 0, pos: null, mag: null, names: [], named: [], points: null, alpha: 0, labels: 0, labelLayer: null, labelEls: [], error: "", bytes: 0 };
 
 const CLASS_RGB = [
   [0.55, 0.7, 1.0],
@@ -122,6 +146,8 @@ const scratch = { x: 0, y: 0, z: 0, ux: 0, uy: 0, uz: 0 };
 
 let sceneStarted = false;
 let nearRefresh = () => {};
+let attachHyg = () => {};
+let hygReady = Promise.resolve(false);
 let viewCamera = null;
 let viewControls = null;
 const trace = {
@@ -444,26 +470,6 @@ function tileRecordEstimate(tile) {
   return 0;
 }
 
-function farQuotas(tiles) {
-  const counts = tiles.map((tile) => tileRecordEstimate(tile));
-  const total = counts.reduce((sum, n) => sum + n, 0) || 1;
-  const quotas = new Map();
-  let assigned = 0;
-  tiles.forEach((tile, i) => {
-    let quota;
-    if (i === tiles.length - 1) {
-      quota = Math.max(0, FAR_BUDGET - assigned);
-    } else {
-      quota = Math.round((FAR_BUDGET * counts[i]) / total);
-      if (counts[i] > 0) quota = Math.max(1, quota);
-      quota = Math.min(quota, Math.max(0, FAR_BUDGET - assigned));
-    }
-    quota = Math.min(quota, counts[i] > 0 ? counts[i] : quota);
-    assigned += quota;
-    quotas.set(tile.id, quota);
-  });
-  return quotas;
-}
 
 function loadedBytes() {
   if (catalog.writeOffset > 0) return catalog.writeOffset;
@@ -484,11 +490,22 @@ function ensureStorage(minBytes) {
   catalog.view = new DataView(catalog.buffer);
 }
 
-function ensureFarBuffers() {
-  if (gpu.farPos) return;
-  gpu.farPos = new Float32Array(FAR_BUDGET * 3);
-  gpu.farCol = new Float32Array(FAR_BUDGET * 3);
-  gpu.farSize = new Float32Array(FAR_BUDGET);
+function ensureFarBuffers(capacity) {
+  if (!isFinite(capacity) || capacity <= 0) capacity = FAR_BUDGET;
+  if (gpu.farPos && gpu.farPos.length / 3 >= capacity) return;
+  const cap = capacity;
+  const oldPos = gpu.farPos;
+  const oldCol = gpu.farCol;
+  const oldSize = gpu.farSize;
+  gpu.farPos = new Float32Array(cap * 3);
+  gpu.farCol = new Float32Array(cap * 3);
+  gpu.farSize = new Float32Array(cap);
+  if (oldPos && lod.tileFarCount > 0) {
+    gpu.farPos.set(oldPos.subarray(0, lod.tileFarCount * 3));
+    gpu.farCol.set(oldCol.subarray(0, lod.tileFarCount * 3));
+    gpu.farSize.set(oldSize.subarray(0, lod.tileFarCount));
+  }
+  gpu.farCapacity = cap;
 }
 
 function ensureNearBuffers() {
@@ -592,47 +609,7 @@ function applyFrameFromStats(stats) {
   setFrame(targetX, targetY, targetZ, frameExtent);
 }
 
-function writeFarPoint(far, view, record, pos, mag) {
-  gpu.farPos[far * 3] = pos.x;
-  gpu.farPos[far * 3 + 1] = pos.y;
-  gpu.farPos[far * 3 + 2] = pos.z;
-  writeAppearance(gpu.farCol, gpu.farSize, far, readColorClass(view, record), mag, 0.55);
-}
 
-function sampleFarRange(base, count, quota, stats) {
-  if (count <= 0 || quota <= 0) return;
-  const stride = Math.max(1, Math.floor(count / quota));
-  // Tile points overwrite the preview from the front. They do not append past it.
-  const farCap = Math.min(FAR_BUDGET, lod.tileFarCount + quota);
-  const { view } = catalog;
-  const pos = scratch;
-  let far = lod.tileFarCount;
-
-  for (let i = 0; i < count; i += stride) {
-    let pick = -1;
-    let bestMag = Infinity;
-    const end = Math.min(i + stride, count);
-    for (let j = i; j < end; j++) {
-      const record = base + j;
-      if (!readStar(view, record, pos)) continue;
-      if (stats) accumulateFrame(stats, pos);
-      const mag = readMag(view, record);
-      if (mag < bestMag) {
-        bestMag = mag;
-        pick = j;
-      }
-    }
-    if (pick >= 0 && far < farCap) {
-      const record = base + pick;
-      readStar(view, record, pos);
-      writeFarPoint(far, view, record, pos, bestMag);
-      far += 1;
-    }
-  }
-  lod.tileFarCount = far;
-  if (lod.tileFarCount >= lod.previewFarCount) lod.previewFarCount = 0;
-  lod.farCount = Math.max(lod.tileFarCount, lod.previewFarCount);
-}
 
 async function showPreview(layoutHint) {
   try {
@@ -649,12 +626,15 @@ async function showPreview(layoutHint) {
     }
     const stats = emptyFrameStats();
     const pos = scratch;
-    const limit = Math.min(count, FAR_BUDGET);
+    const limit = Math.min(count, PREVIEW_BUDGET);
     let far = 0;
     for (let i = 0; i < limit; i++) {
       if (!readStar(view, i, pos)) continue;
       accumulateFrame(stats, pos);
-      writeFarPoint(far, view, i, pos, readMag(view, i));
+      gpu.previewPos[far*3] = pos.x;
+      gpu.previewPos[far*3+1] = pos.y;
+      gpu.previewPos[far*3+2] = pos.z;
+      writeFarAppearance(gpu.previewCol, gpu.previewSize, far, readColorClass(view, i), readMag(view, i));
       far += 1;
     }
     if (far === 0 || stats.valid === 0) return false;
@@ -688,26 +668,27 @@ async function showPreview(layoutHint) {
 
 function publishFar() {
   if (!gpu.far) return;
-  const n = lod.farCount;
+  const n = lod.tileFarCount || lod.farCount;
   const geo = gpu.far.geometry;
   const pos = geo.attributes.position;
   const col = geo.attributes.color;
   const size = geo.attributes.aSize;
-  pos.count = n;
-  col.count = n;
-  size.count = n;
+  pos.clearUpdateRanges();
+  col.clearUpdateRanges();
+  size.clearUpdateRanges();
   pos.needsUpdate = true;
   col.needsUpdate = true;
   size.needsUpdate = true;
   geo.setDrawRange(0, n);
-  if (n > 0) geo.computeBoundingSphere();
+  publishPreview();
 }
 
 function clearPreviewState() {
   lod.previewFarCount = 0;
   lod.tileFarCount = 0;
   lod.farCount = 0;
-  if (gpu.far) publishFar();
+  if (gpu.far) gpu.far.geometry.setDrawRange(0, 0);
+  publishPreview();
 }
 
 function retargetFarMesh() {
@@ -812,7 +793,8 @@ function enqueueIngest(fn) {
   return run;
 }
 
-async function ingestTile(tile, buffer, quota) {
+async function ingestTile(tile, buffer) {
+  await hygReady;
   if (!catalog.layoutReady) {
     const probe = new DataView(buffer);
     catalog.layout = detectLayout(probe, Math.floor(buffer.byteLength / RECORD_SIZE));
@@ -821,7 +803,7 @@ async function ingestTile(tile, buffer, quota) {
 
   const seg = appendTileBytes(buffer);
   const stats = sceneStarted ? null : emptyFrameStats();
-  sampleFarRange(seg.base, seg.count, quota, stats);
+  await ingestFarRange(seg.base, seg.count, stats);
 
   if (!sceneStarted && lod.farCount > 0 && stats && stats.valid > 0) {
     applyFrameFromStats(stats);
@@ -837,7 +819,7 @@ async function ingestTile(tile, buffer, quota) {
     });
     await yieldFrame();
   } else if (sceneStarted) {
-    publishFar();
+    publishPreview();
     updateHud();
     trace.paints.push({
       id: tile.id,
@@ -860,7 +842,7 @@ function rememberTileError(err) {
   catalog.tileErrors.push(err && err.message ? err.message : String(err));
 }
 
-function downloadTilesInOrder(tiles, quotas) {
+function downloadTilesInOrder(tiles) {
   let cursor = 0;
   let active = 0;
   let settled = 0;
@@ -877,7 +859,7 @@ function downloadTilesInOrder(tiles, quotas) {
             (buffer) => {
               active -= 1;
               launch();
-              return enqueueIngest(() => ingestTile(tile, buffer, quotas.get(tile.id) || 0));
+              return enqueueIngest(() => ingestTile(tile, buffer));
             },
             (err) => {
               active -= 1;
@@ -912,10 +894,12 @@ async function streamTiles(index, tiles) {
     Number(index.total_bytes) ||
     tiles.reduce((sum, tile) => sum + (Number(tile.bytes) || 0), 0);
   ensureStorage(Math.max(hintedBytes, RECORD_SIZE));
-  ensureFarBuffers();
+  const capacity = Number(index.total_records) || tiles.reduce((sum, tile) => sum + tileRecordEstimate(tile), 0);
+  ensureFarBuffers(capacity);
   ensureNearBuffers();
+  ensurePreviewBuffers();
 
-  const quotas = farQuotas(tiles);
+  startHygLoad();
   const showedPreview = await showPreview(index.layout);
   // Chrome's network throttle aborts tile fetches that start in the same
   // task as the preview frame. A macrotask boundary lets the queue open.
@@ -928,12 +912,10 @@ async function streamTiles(index, tiles) {
 
   // Two downloads at a time, in look order. A finished tile is ingested
   // immediately and the freed slot starts the next file.
-  await downloadTilesInOrder(tiles, quotas);
+  await downloadTilesInOrder(tiles);
 
   if (lod.tileFarCount > 0) {
-    lod.previewFarCount = 0;
-    lod.farCount = lod.tileFarCount;
-    publishFar();
+    dropPreview();
   }
   catalog.streamDone = true;
   if (!sceneStarted || catalog.count === 0) {
@@ -1047,7 +1029,7 @@ async function buildFarAndIndex() {
   bbox.sy = Math.max(bbox.maxY - bbox.minY, 1);
   bbox.sz = Math.max(bbox.maxZ - bbox.minZ, 1);
   catalog.bbox = bbox;
-  lod.farCount = far;
+  markFallbackFar(far);
 
   if (catalog.layout === "radec") {
     const dirLen = Math.hypot(sumUx, sumUy, sumUz) || 1;
@@ -1158,6 +1140,9 @@ function fillNear(target) {
           const end = begin + cellCount[c];
           for (let k = begin; k < end && n < NEAR_BUDGET; k++) {
             const i = cellIndex[k];
+            if (isHygDuplicate(view, i)) {
+              continue;
+            }
             if (!readStar(view, i, pos)) continue;
             const dx = pos.x - target.x;
             const dy = pos.y - target.y;
@@ -1209,14 +1194,24 @@ function updateHud() {
   const tileNote = total > 1 ? `${loaded}/${total} tiles` : catalog.sourceLabel;
   const waiting = total > 1 && loaded < total;
   const previewing = lod.previewFarCount > lod.tileFarCount && loaded === 0;
+  const hygN = hyg.points && hyg.points.visible ? hyg.n : 0;
+  const dupSkipped = lod.hygDupSkipped || 0;
   el.mode.textContent = lod.mode === "near" ? "LOD NEAR" : "LOD FAR";
   el.mode.dataset.mode = lod.mode;
-  el.count.textContent = `${lod.farCount.toLocaleString()} far · ${lod.nearCount.toLocaleString()} near · ${tileNote}`;
+  el.count.textContent = `${lod.farCount.toLocaleString()} far · ${lod.nearCount.toLocaleString()} near · ${hygN} HYG · ${tileNote}`;
   const farLine = previewing
     ? `FAR preview ${lod.farCount.toLocaleString()} stars, not counted in the catalog`
     : total > 1
-      ? `FAR sample ${lod.farCount.toLocaleString()} from tiles that have arrived`
+      ? `FAR all ${lod.tileFarCount.toLocaleString()} loaded stars drawn in one GPU buffer`
       : `FAR stride ${catalog.stride} → ${lod.farCount.toLocaleString()} generalized across loaded tiles`;
+  let hygLine = "";
+  if (hyg.error) {
+    hygLine = `<br>HYG close-up: ${escapeHtml(hyg.error)}`;
+  } else if (hyg.n > 0) {
+    hygLine = `<br>HYG close-up: ${hyg.n} nearest stars ≤ ${hyg.maxDistPc.toFixed(1)} pc, ${hyg.named.length} named` +
+      (dupSkipped > 0 ? ` · ${dupSkipped} Gaia duplicates hidden` : "") +
+      (hyg.alpha > 0.02 ? " · visible" : " · zoom in to see");
+  }
   const errLines = catalog.tileErrors.length
     ? catalog.tileErrors
     : catalog.fallbackNote
@@ -1225,7 +1220,7 @@ function updateHud() {
   const errNote = errLines.length ? `<br>${errLines.map(escapeHtml).join("<br>")}` : "";
   setStatus(
     `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB loaded · ${tileNote} · 62 B LE · ${layoutNote}<br>` +
-      `${farLine}<br>` +
+      `${farLine}${hygLine}<br>` +
       (previewing
         ? `Coarse sky preview is on screen. Tile records replace those points as they arrive.`
         : waiting
@@ -1234,7 +1229,7 @@ function updateHud() {
           ? `NEAR accurate subset ${lod.nearCount.toLocaleString()} (cap ${NEAR_BUDGET.toLocaleString()}) within ${catalog.nearRadius.toFixed(1)} of target`
           : `Zoom in toward a region to load an accurate nearby subset`) +
       errNote +
-      `<br>No full star-object array. Drag to orbit · scroll to zoom · right-drag to pan`
+      `<br>No full star-object array. Drag to orbit · pinch or scroll to zoom · two-finger twist to rotate · right-drag to pan`
   );
 }
 
@@ -1268,15 +1263,36 @@ function initScene() {
   const skyReach = catalog.tileTotal > 1 ? SKY_RADIUS * 16 : 0;
   controls.maxDistance = Math.max(frame.extent * 14, frame.dist * 6, skyReach);
   controls.target.set(frame.targetX, frame.targetY, frame.targetZ);
+  controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
+  controls.enableZoom = true;
+  controls.zoomSpeed = 1.2;
 
   viewCamera = camera;
   viewControls = controls;
 
-  gpu.far = makePoints(gpu.farPos, gpu.farCol, gpu.farSize, lod.farCount);
+  gpu.far = makePoints(gpu.farPos, gpu.farCol, gpu.farSize, lod.tileFarCount);
+  gpu.far.geometry.attributes.position.count = gpu.farPos.length / 3;
+  gpu.far.geometry.attributes.color.count = gpu.farCol.length / 3;
+  gpu.far.geometry.attributes.aSize.count = gpu.farSize.length;
+  gpu.far.geometry.setDrawRange(0, lod.tileFarCount);
+  gpu.far.frustumCulled = false;
+
   gpu.near = makePoints(gpu.nearPos, gpu.nearCol, gpu.nearSize, 0);
   gpu.near.visible = false;
+
   scene.add(gpu.far);
   scene.add(gpu.near);
+
+  if (gpu.previewPos) {
+    gpu.preview = makePoints(gpu.previewPos, gpu.previewCol, gpu.previewSize, lod.previewFarCount);
+    gpu.preview.geometry.attributes.position.count = gpu.previewPos.length / 3;
+    gpu.preview.geometry.attributes.color.count = gpu.previewCol.length / 3;
+    gpu.preview.geometry.attributes.aSize.count = gpu.previewSize.length;
+    gpu.preview.geometry.setDrawRange(0, lod.previewFarCount);
+    gpu.preview.frustumCulled = false;
+    gpu.preview.visible = lod.previewFarCount > 0;
+    scene.add(gpu.preview);
+  }
 
   if (catalog.layout === "xyz") {
     const origin = new THREE.Mesh(
@@ -1285,6 +1301,14 @@ function initScene() {
     );
     scene.add(origin);
   }
+
+  attachHyg = () => {
+    if (hyg.points || !hyg.n) return;
+    const pts = makeHygPoints();
+    if (pts) scene.add(pts);
+    ensureHygLabelLayer(el.canvasWrap);
+  };
+  attachHyg();
 
   function onResize() {
     const w = el.canvasWrap.clientWidth;
@@ -1295,6 +1319,12 @@ function initScene() {
   }
   window.addEventListener("resize", onResize);
 
+  const wrap = el.canvasWrap;
+  wrap.style.touchAction = "none";
+  ["gesturestart", "gesturechange", "gestureend"].forEach(ev => {
+    wrap.addEventListener(ev, e => e.preventDefault(), { passive: false });
+  });
+
   function maybeRefreshNear() {
     const dist = camera.position.distanceTo(controls.target);
     const wantNear = lod.mode === "near" ? dist < catalog.nearExit : dist < catalog.nearEnter;
@@ -1304,7 +1334,15 @@ function initScene() {
       Math.abs(dist - lod.lastDist) > moveEps * 1.6;
 
     if (wantNear && (lod.mode !== "near" || moved)) {
-      fillNear(controls.target);
+      let n = fillNear(controls.target);
+      if (n === 0) {
+        const snap = findStarNearRay(camera, controls.target);
+        if (snap) {
+          controls.target.copy(snap);
+          lod.nearSnaps = (lod.nearSnaps || 0) + 1;
+          n = fillNear(controls.target);
+        }
+      }
       gpu.near.visible = lod.nearCount > 0;
       lod.mode = "near";
       lod.lastTarget.copy(controls.target);
@@ -1325,7 +1363,15 @@ function initScene() {
     const dist = camera.position.distanceTo(controls.target);
     const wantNear = lod.mode === "near" ? dist < catalog.nearExit : dist < catalog.nearEnter;
     if (!wantNear && lod.mode !== "near") return;
-    fillNear(controls.target);
+    let n = fillNear(controls.target);
+    if (n === 0 && lod.mode === "near") {
+      const snap = findStarNearRay(camera, controls.target);
+      if (snap) {
+        controls.target.copy(snap);
+        lod.nearSnaps = (lod.nearSnaps || 0) + 1;
+        n = fillNear(controls.target);
+      }
+    }
     gpu.near.visible = lod.nearCount > 0;
     if (lod.nearCount > 0) {
       lod.mode = "near";
@@ -1339,6 +1385,11 @@ function initScene() {
     requestAnimationFrame(animate);
     controls.update();
     maybeRefreshNear();
+    updateHygFade(camera);
+    trace.cameraDist = camera.position.distanceTo(controls.target);
+    if (trace.frame % 6 === 0) {
+      updateHygLabels(camera, el.canvasWrap.clientWidth, el.canvasWrap.clientHeight);
+    }
     renderer.render(scene, camera);
     trace.pointsDrawn = renderer.info.render.points;
     if (!trace.firstFrameMs && trace.pointsDrawn > 0) {
@@ -1348,6 +1399,7 @@ function initScene() {
       trace.brightPixels = countBrightPixels(renderer);
       trace.sampleBright = false;
     }
+    trace.frame = (trace.frame || 0) + 1;
   }
   animate();
   sceneStarted = true;
@@ -1481,6 +1533,329 @@ function frameDirection(ux, uy, uz, dist = 28) {
   return true;
 }
 
+function ensurePreviewBuffers() {
+  if (gpu.previewPos) return;
+  gpu.previewPos = new Float32Array(PREVIEW_BUDGET * 3);
+  gpu.previewCol = new Float32Array(PREVIEW_BUDGET * 3);
+  gpu.previewSize = new Float32Array(PREVIEW_BUDGET);
+}
+
+function writeFarAppearance(col, size, offset, colorClass, mag) {
+  const t = Math.min(Math.max((21.5 - mag) / 16.5, 0), 1);
+  const brightness = 0.10 + 0.90 * Math.pow(t, 1.6);
+  const rgb = CLASS_RGB[colorClass % CLASS_RGB.length];
+  const i = offset * 3;
+  col[i] = rgb[0] * brightness;
+  col[i + 1] = rgb[1] * brightness;
+  col[i + 2] = rgb[2] * brightness;
+  let s = (0.30 + 2.2 * t * t) * FAR_SIZE_SCALE;
+  size[offset] = s < 0.22 ? 0.22 : s;
+}
+
+function isHygDuplicate(view, record) {
+  if (hyg.cutoffPc <= 0) return false;
+  const plx = view.getFloat64(record * RECORD_SIZE + OFF_PLX, true);
+  if (!(plx > 0)) return false;
+  const d = 1000 / plx;
+  return d <= hyg.cutoffPc;
+}
+
+async function ingestFarRange(base, count, stats) {
+  if (count <= 0) return;
+  const { view } = catalog;
+  const pos = scratch;
+  ensureFarBuffers(lod.tileFarCount + count);
+  let idx = lod.tileFarCount;
+  let chunkStartIdx = idx;
+  let processed = 0;
+  for (let i = 0; i < count; i++) {
+    const record = base + i;
+    if (isHygDuplicate(view, record)) {
+      lod.hygDupSkipped = (lod.hygDupSkipped || 0) + 1;
+      continue;
+    }
+    if (!readStar(view, record, pos)) continue;
+    if (stats) accumulateFrame(stats, pos);
+    const colorClass = readColorClass(view, record);
+    const mag = readMag(view, record);
+    writeFarAppearance(gpu.farCol, gpu.farSize, idx, colorClass, mag);
+    gpu.farPos[idx * 3] = pos.x;
+    gpu.farPos[idx * 3 + 1] = pos.y;
+    gpu.farPos[idx * 3 + 2] = pos.z;
+    idx++;
+    processed++;
+    if (processed % FAR_INGEST_CHUNK === 0 && sceneStarted) {
+      publishFarRange(chunkStartIdx, idx);
+      await yieldFrame();
+      chunkStartIdx = idx;
+    }
+  }
+  lod.tileFarCount = idx;
+  if (sceneStarted) {
+    publishFarRange(chunkStartIdx, idx);
+  }
+  lod.farCount = lod.tileFarCount + lod.previewFarCount;
+}
+
+function publishFarRange(start, end) {
+  if (!gpu.far) return;
+  const geo = gpu.far.geometry;
+  const pos = geo.attributes.position;
+  const col = geo.attributes.color;
+  const aSize = geo.attributes.aSize;
+  if (end > start) {
+    const itemCount = end - start;
+    pos.addUpdateRange(start * 3, itemCount * 3);
+    col.addUpdateRange(start * 3, itemCount * 3);
+    aSize.addUpdateRange(start, itemCount);
+    pos.needsUpdate = true;
+    col.needsUpdate = true;
+    aSize.needsUpdate = true;
+  }
+  geo.setDrawRange(0, lod.tileFarCount);
+}
+
+function publishPreview() {
+  if (!gpu.preview) return;
+  const n = lod.previewFarCount;
+  const geo = gpu.preview.geometry;
+  const pos = geo.attributes.position;
+  const col = geo.attributes.color;
+  const size = geo.attributes.aSize;
+  pos.needsUpdate = true;
+  col.needsUpdate = true;
+  size.needsUpdate = true;
+  geo.setDrawRange(0, n);
+  gpu.preview.visible = n > 0;
+}
+
+function dropPreview() {
+  lod.previewFarCount = 0;
+  lod.farCount = lod.tileFarCount;
+  publishPreview();
+}
+
+function parseHygNear(buffer) {
+  const dv = new DataView(buffer);
+  if (buffer.byteLength < 24) throw new Error("hyg-near.bin: too small");
+  if (dv.getUint32(0, true) !== 0x32475948) throw new Error("hyg-near.bin: bad magic");
+  const n = dv.getUint32(4, true);
+  const scale_pc = dv.getFloat32(8, true);
+  const max_dist_pc = dv.getFloat32(12, true);
+  const name_count = dv.getUint32(16, true);
+  const name_bytes = dv.getUint32(20, true);
+  const posBytes = n * 3 * 2;
+  const magBytes = n;
+  const nameTableBytes = name_count * 3;
+  const minSize = 24 + posBytes + magBytes + nameTableBytes + name_bytes;
+  if (buffer.byteLength < minSize) throw new Error("hyg-near.bin: truncated");
+
+  const pos = new Float32Array(n * 3);
+  const mag = new Float32Array(n);
+  const names = new Array(n).fill("");
+  const dec = new TextDecoder();
+  let off = 24;
+
+  for (let i = 0; i < n * 3; i++) {
+    pos[i] = dv.getInt16(off, true) * scale_pc;
+    off += 2;
+  }
+  for (let i = 0; i < n; i++) {
+    mag[i] = -2 + dv.getUint8(off++) * 0.1;
+  }
+
+  const idxs = new Uint16Array(name_count);
+  const lens = new Uint8Array(name_count);
+  for (let k = 0; k < name_count; k++) {
+    const idx = dv.getUint16(off, true);
+    if (idx >= n) throw new Error("hyg-near.bin: bad name index");
+    idxs[k] = idx;
+    lens[k] = dv.getUint8(off + 2);
+    off += 3;
+  }
+  for (let k = 0; k < name_count; k++) {
+    const len = lens[k];
+    if (len > 0) {
+      const name = dec.decode(new Uint8Array(buffer, off, len));
+      names[idxs[k]] = name;
+      off += len;
+    }
+  }
+
+  const namedList = [];
+  for (let i = 0; i < n; i++) {
+    if (names[i]) namedList.push(i);
+  }
+  namedList.sort((a, b) => mag[a] - mag[b]);
+
+  hyg.n = n;
+  hyg.maxDistPc = max_dist_pc;
+  hyg.cutoffPc = max_dist_pc;
+  hyg.pos = pos;
+  hyg.mag = mag;
+  hyg.names = names;
+  hyg.named = namedList;
+  hyg.bytes = buffer.byteLength;
+}
+
+async function loadHygNear() {
+  try {
+    const res = await fetch(HYG_FILE, { cache: "no-cache" });
+    if (!res.ok) throw new Error(`hyg-near.bin ${res.status}`);
+    const buf = await res.arrayBuffer();
+    parseHygNear(buf);
+    return true;
+  } catch (err) {
+    hyg.error = `hyg-near.bin: ${err.message}`;
+    hyg.cutoffPc = 0;
+    hyg.n = 0;
+    hyg.pos = null;
+    hyg.mag = null;
+    hyg.names = [];
+    hyg.named = [];
+    console.warn(hyg.error, err);
+    return false;
+  }
+}
+
+function makeHygPoints() {
+  if (hyg.n === 0) return null;
+  const color = new Float32Array(hyg.n * 3);
+  const aSize = new Float32Array(hyg.n);
+  hyg.baseCol = new Float32Array(hyg.n * 3);
+  for (let i = 0; i < hyg.n; i++) {
+    const mag = hyg.mag[i];
+    const t = Math.max(0, Math.min(1, (12 - mag) / 13.5));
+    const brightness = 0.3 + 0.7 * t;
+    const idx = i * 3;
+    const r = 1.0 * brightness;
+    const g = 0.95 * brightness;
+    const b = 0.86 * brightness;
+    hyg.baseCol[idx] = r; hyg.baseCol[idx + 1] = g; hyg.baseCol[idx + 2] = b;
+    color[idx] = 0; color[idx + 1] = 0; color[idx + 2] = 0;
+    aSize[i] = 1.4 + 5.0 * t * t;
+  }
+  const points = makePoints(hyg.pos, color, aSize, hyg.n);
+  points.frustumCulled = false;
+  points.visible = false;
+  points.renderOrder = 2;
+  hyg.points = points;
+  hyg.col = color;
+  hyg.shownAlpha = -1;
+  return points;
+}
+
+function updateHygFade(camera) {
+  const r = camera.position.length();
+  const alpha = Math.max(0, Math.min(1, (HYG_FADE_FAR - r) / (HYG_FADE_FAR - HYG_FADE_NEAR)));
+  hyg.alpha = alpha;
+  if (!hyg.points) return;
+  const q = Math.round(alpha * 32) / 32;
+  if (q !== hyg.shownAlpha) {
+    for (let i = 0; i < hyg.n * 3; i++) {
+      hyg.col[i] = hyg.baseCol[i] * q;
+    }
+    hyg.points.geometry.attributes.color.needsUpdate = true;
+    hyg.shownAlpha = q;
+  }
+  hyg.points.visible = q > 0;
+}
+
+function ensureHygLabelLayer(parent) {
+  if (!hyg.labelLayer) {
+    hyg.labelLayer = document.createElement("div");
+    hyg.labelLayer.className = "star-labels";
+    parent.appendChild(hyg.labelLayer);
+  }
+  return hyg.labelLayer;
+}
+
+function updateHygLabels(camera, width, height) {
+  if (!hyg.labelLayer || hyg.alpha <= 0.3 || !hyg.points) {
+    for (let el of hyg.labelEls) el.style.display = "none";
+    hyg.labels = 0;
+    return;
+  }
+  updateHygLabels.v ||= new THREE.Vector3();
+  const v = updateHygLabels.v;
+  let shown = 0;
+  for (let i = 0; i < hyg.named.length; i++) {
+    const idx = hyg.named[i];
+    const mag = hyg.mag[idx];
+    v.set(hyg.pos[idx * 3], hyg.pos[idx * 3 + 1], hyg.pos[idx * 3 + 2]);
+    const dist = v.distanceTo(camera.position);
+    if (mag > HYG_LABEL_MAG && dist >= HYG_LABEL_NEAR_PC) continue;
+    v.project(camera);
+    const x = v.x, y = v.y, z = v.z;
+    if (z <= -1 || z >= 1 || Math.abs(x) > 1 || Math.abs(y) > 1) continue;
+    const sx = (x + 1) / 2 * width;
+    const sy = (1 - y) / 2 * height;
+    let el = hyg.labelEls[shown];
+    if (!el) {
+      el = document.createElement("span");
+      el.className = "star-label";
+      hyg.labelLayer.appendChild(el);
+      hyg.labelEls.push(el);
+    }
+    const name = hyg.names[idx];
+    if (el.textContent !== name) el.textContent = name;
+    el.style.transform = `translate(${sx | 0}px, ${sy | 0}px)`;
+    el.style.display = "block";
+    el.style.opacity = hyg.alpha;
+    shown++;
+    if (shown >= HYG_LABEL_MAX) break;
+  }
+  for (let i = shown; i < hyg.labelEls.length; i++) {
+    hyg.labelEls[i].style.display = "none";
+  }
+  hyg.labels = shown;
+}
+
+function findStarNearRay(camera, target) {
+  const d = new THREE.Vector3().subVectors(target, camera.position).normalize();
+  const pos = gpu.farPos;
+  const n = lod.tileFarCount * 3;
+  let bestScore = Infinity;
+  let bestIdx = -1;
+  const camX = camera.position.x;
+  const camY = camera.position.y;
+  const camZ = camera.position.z;
+  const dx = d.x, dy = d.y, dz = d.z;
+
+  for (let i = 0; i < n; i += 3) {
+    const vx = pos[i] - camX;
+    const vy = pos[i + 1] - camY;
+    const vz = pos[i + 2] - camZ;
+    const along = vx * dx + vy * dy + vz * dz;
+    if (along <= 0) continue;
+    const v2 = vx * vx + vy * vy + vz * vz;
+    const perp2 = v2 - along * along;
+    const score = perp2 / (along * along);
+    if (score < bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+
+  if (bestIdx === -1 || bestScore > 0.132) return null; // tan(20°)^2 ≈ 0.132
+  return new THREE.Vector3(pos[bestIdx], pos[bestIdx + 1], pos[bestIdx + 2]);
+}
+
+function startHygLoad() {
+  hygReady = loadHygNear().then((ok) => {
+    if (ok) attachHyg();
+    if (sceneStarted) updateHud();
+    return ok;
+  });
+  return hygReady;
+}
+
+function markFallbackFar(far) {
+  lod.tileFarCount = far;
+  lod.farCount = far;
+  lod.previewFarCount = 0;
+}
+
 window.__BIN_LOD = {
   snapshot() {
     return {
@@ -1503,6 +1878,17 @@ window.__BIN_LOD = {
       target: viewControls
         ? [viewControls.target.x, viewControls.target.y, viewControls.target.z]
         : null,
+      hygCount: hyg.points && hyg.points.visible ? hyg.n : 0,
+      hygLoaded: hyg.n,
+      hygVisible: !!(hyg.points && hyg.points.visible),
+      hygAlpha: hyg.alpha,
+      hygCutoffPc: hyg.cutoffPc,
+      hygDupSkipped: lod.hygDupSkipped || 0,
+      hygError: hyg.error,
+      labels: hyg.labels,
+      cameraDist: trace.cameraDist ?? null,
+      nearSnaps: lod.nearSnaps || 0,
+      farCapacity: gpu.farCapacity || 0,
     };
   },
   requestBrightSample() {

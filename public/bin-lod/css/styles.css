@@ -178,3 +178,23 @@ canvas {
     font-size: 0.72rem;
   }
 }
+
+.star-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 1;
+}
+.star-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: 4px 0 0 6px;
+  font-size: 11px;
+  line-height: 1;
+  color: #d7e4ff;
+  text-shadow: 0 0 3px #000;
+  white-space: nowrap;
+  will-change: transform;
+}

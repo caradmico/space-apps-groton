@@ -66,11 +66,27 @@ curl -L -o stars.json https://staris-b01f2.firebaseapp.com/data/stars.json
 python3 public/bin-lod/scripts/build-v2-pilot.py stars.json
 ```
 
-HYG database by [astronexus (David Nash)](https://github.com/astronexus/HYG-Database), CC BY-SA 4.0. Share-alike: adaptations of the HYG catalog stay under CC BY-SA 4.0.
+HYG database by [astronexus (David Nash)](https://github.com/astronexus/HYG-Database), [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). `data/hyg-near.bin` is a changed version: the nearest-8,000 subset, re-encoded. Share-alike: adaptations of the HYG catalog stay under CC BY-SA 4.0.
 
 This work has made use of data from the European Space Agency (ESA) mission Gaia (https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis Consortium (DPAC, https://www.cosmos.esa.int/web/gaia/dpac/consortium).
+
+## Live viewer: all stars, near view, HYG close-up
+
+FAR now draws every loaded tile star (639,404 when all 9 tiles are in) as GPU points in one preallocated buffer sized from `tiles.json` `total_records`. Each tile is written into it in 16,384-record chunks with a frame yield between chunks, and only the new range is uploaded (`addUpdateRange`). Size and brightness follow magnitude (faint stars small and dim). The 12,288-star `preview.bin` still paints first in its own layer and is hidden once every tile is in. Download order and two-at-a-time tile streaming are unchanged.
+
+In a headless 412x915 touch run on the old code, a centred pinch at the default view reached near 12,288. Aiming at empty sky with no Gaia tile produced an empty near query. The likely cause on phones is that OrbitControls' default two-finger gesture combines dolly and pan, so a pinch slides the orbit target off the small Gaia patches. iOS Safari can also treat the pinch as page zoom. The fix changes two-finger gesture to dolly plus rotate with no pan, cancels Safari `gesture*` events on the canvas, and re-centres the target on the loaded star nearest screen centre (within 20 degrees) when the near query is empty before querying again. Thresholds are unchanged. After the fix the same empty-sky pinch gives 12,288 near.
+
+Close-up stars use `data/hyg-near.bin` (58,222 bytes). It contains the 7,999 nearest stars from the StarIS Firebase app's `stars.json` (Sun removed), with real 3D positions in parsecs out to 47.6 pc and 206 proper names. They form a separate layer that fades in as the camera comes within 260 to 160 pc of the Sun. Names appear for named stars brighter than magnitude 2.5 or closer than 12 pc to the camera (24 labels max).
+
+HYG2 format (little-endian): 24-byte header (`HYG2`, uint32 n, float32 scale_pc, float32 max_dist_pc, uint32 name_count, uint32 name_bytes); int16 x,y,z × n (pc = value × scale_pc, about 0.0014 pc steps); uint8 mag_q × n (mag = −2 + 0.1 × mag_q); name_count × (uint16 star index, uint8 byte length); then the UTF-8 names in table order.
+
+Rebuild with: `curl -L -o stars.json https://staris-b01f2.firebaseapp.com/data/stars.json` then `python3 public/bin-lod/scripts/build-hyg-near.py stars.json` (writes only `data/hyg-near.bin`, re-reads and verifies it).
+
+No double drawing occurs. HYG owns the solar neighbourhood. A Gaia record with a finite positive parallax whose distance 1000/parallax is at or inside the HYG file's max distance (47.6 pc) is skipped in both FAR and NEAR (4 records in the current tiles). HYG is the complete nearby set with names; the Gaia tiles have parallax for only 1,435 of 639,404 records and their brightest star is about magnitude 4.9, so a distance cutoff removes the overlap without positional cross-matching.
+
+Data credit: HYG database by astronexus (David Nash), https://github.com/astronexus/HYG-Database, CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). `data/hyg-near.bin` is a derived file (the nearest-8,000 subset, re-encoded) and stays under CC BY-SA 4.0. `stars.json` was downloaded once from the app's public hosting to build the file. The viewer does not contact Firebase and nothing in Firebase was changed. The HYG layer uses the same point shader as the Gaia layers; fading is done by scaling colours, so it adds no shader compile when it first appears.
 
 ## Build note
 Raw Drive shards stay off Pages. Only LOD tiles are published.
 
-Headless checks use a global `WebSocket`. On Node 20, pass `--experimental-websocket` (`node --experimental-websocket scripts/check-bin-lod-progressive.mjs`, and the same flag for `scripts/check-bin-lod-throttle.mjs`, `scripts/check-bin-lod-fallback.mjs`, `scripts/check-bin-lod-errors.mjs`, `scripts/check-bin-lod-v2.mjs`, and `scripts/check-bin-lod-v2-range.mjs`).
+Headless checks use a global `WebSocket`. On Node 20, pass `--experimental-websocket` (`node --experimental-websocket scripts/check-bin-lod-progressive.mjs`, and the same flag for `scripts/check-bin-lod-throttle.mjs`, `scripts/check-bin-lod-fallback.mjs`, `scripts/check-bin-lod-errors.mjs`, `scripts/check-bin-lod-v2.mjs`, `scripts/check-bin-lod-v2-range.mjs`, and `scripts/check-bin-lod-mobile.mjs`). The mobile check loads the page at 412×915 (DPR 2, touch) throttled to 4 Mbps, pinches with real touch events, repeats the pinch after aiming at empty sky, and prints far / near / HYG counts, time to first draw, main-thread blocking and bytes; `REPORT_ONLY=1` prints without asserting.
