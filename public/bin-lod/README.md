@@ -66,7 +66,7 @@ curl -L -o stars.json https://staris-b01f2.firebaseapp.com/data/stars.json
 python3 public/bin-lod/scripts/build-v2-pilot.py stars.json
 ```
 
-HYG database by [astronexus (David Nash)](https://github.com/astronexus/HYG-Database), CC BY-SA 4.0. Share-alike: adaptations of the HYG catalog stay under CC BY-SA 4.0.
+HYG database by [astronexus (David Nash)](https://github.com/astronexus/HYG-Database), [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). `data/hyg-near.bin` is a changed version: the nearest-8,000 subset, re-encoded. Share-alike: adaptations of the HYG catalog stay under CC BY-SA 4.0.
 
 This work has made use of data from the European Space Agency (ESA) mission Gaia (https://www.cosmos.esa.int/gaia), processed by the Gaia Data Processing and Analysis Consortium (DPAC, https://www.cosmos.esa.int/web/gaia/dpac/consortium).
 
@@ -84,7 +84,7 @@ Rebuild with: `curl -L -o stars.json https://staris-b01f2.firebaseapp.com/data/s
 
 No double drawing occurs. HYG owns the solar neighbourhood. A Gaia record with a finite positive parallax whose distance 1000/parallax is at or inside the HYG file's max distance (47.6 pc) is skipped in both FAR and NEAR (4 records in the current tiles). HYG is the complete nearby set with names; the Gaia tiles have parallax for only 1,435 of 639,404 records and their brightest star is about magnitude 4.9, so a distance cutoff removes the overlap without positional cross-matching.
 
-Data credit: HYG database by astronexus (David Nash), https://github.com/astronexus/HYG-Database, CC BY-SA 4.0. `data/hyg-near.bin` is a derived file and stays under CC BY-SA 4.0. `stars.json` was downloaded once from the app's public hosting to build the file. The viewer does not contact Firebase and nothing in Firebase was changed. The HYG layer uses the same point shader as the Gaia layers; fading is done by scaling colours, so it adds no shader compile when it first appears.
+Data credit: HYG database by astronexus (David Nash), https://github.com/astronexus/HYG-Database, CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). `data/hyg-near.bin` is a derived file (the nearest-8,000 subset, re-encoded) and stays under CC BY-SA 4.0. `stars.json` was downloaded once from the app's public hosting to build the file. The viewer does not contact Firebase and nothing in Firebase was changed. The HYG layer uses the same point shader as the Gaia layers; fading is done by scaling colours, so it adds no shader compile when it first appears.
 
 ## Build note
 Raw Drive shards stay off Pages. Only LOD tiles are published.
