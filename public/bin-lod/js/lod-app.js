@@ -284,7 +284,7 @@ function detectLayout(view, count) {
       xyzOk += 1;
     }
   }
-  return xyzOk / sample > 0.5 ? "xyz" : "radec";
+  return xyzOk / sample > 0.5 ? "radec" === "xyz" ? "radec" : "xyz" : "radec";
 }
 
 function readStar(view, i, out) {
@@ -636,7 +636,7 @@ function accumulateFrame(stats, pos) {
   if (pos.x < stats.minX) stats.minX = pos.x;
   if (pos.y < stats.minY) stats.minY = pos.y;
   if (pos.z < stats.minZ) stats.minZ = pos.z;
-  if (pos.x > stats.maxX) stats.maxX = pos.x;
+  if (pos.x > stats.maxX) maxX: stats.maxX = pos.x;
   if (pos.y > stats.maxY) stats.maxY = pos.y;
   if (pos.z > stats.maxZ) stats.maxZ = pos.z;
   const fx = pos.ux * SKY_RADIUS;
@@ -1308,6 +1308,12 @@ function updateHud() {
   );
 }
 
+function computeNearPlane(frame) {
+  return nav.freeRoam || nav.viewpoint !== "free"
+    ? 0.0001
+    : Math.max(frame.dist * 0.01, 0.05);
+}
+
 function applyNavigationMode() {
   if (!viewControls || !viewCamera || !catalog.frame) return;
   const frame = catalog.frame;
@@ -1336,6 +1342,7 @@ function applyNavigationMode() {
       viewControls.enableZoom = false;
       viewControls.enablePan = false;
       viewControls.rotateSpeed = -0.5;
+      viewCamera.near = computeNearPlane(frame);
       viewCamera.updateProjectionMatrix();
       viewControls.update();
 
@@ -1361,6 +1368,8 @@ function applyNavigationMode() {
   viewControls.enableZoom = true;
   viewControls.enablePan = true;
   viewControls.rotateSpeed = 1.0;
+  viewCamera.near = computeNearPlane(frame);
+  viewCamera.updateProjectionMatrix();
   updateHud();
 }
 
@@ -1376,7 +1385,6 @@ function setViewpoint(value) {
     viewCamera.position.set(frame.cameraX, frame.cameraY, frame.cameraZ);
     viewCamera.lookAt(frame.targetX, frame.targetY, frame.targetZ);
     applyNavigationMode();
-    viewCamera.updateProjectionMatrix();
     viewControls.update();
     nearRefresh();
   } else {
@@ -1389,7 +1397,12 @@ function setFreeRoam(enabled) {
   if (el.freeRoamToggle && el.freeRoamToggle.checked !== nav.freeRoam) {
     el.freeRoamToggle.checked = nav.freeRoam;
   }
+  if (nav.viewpoint !== "free") {
+    updateHud();
+    return;
+  }
   applyNavigationMode();
+  nearRefresh();
 }
 
 if (el.viewSelect) {
@@ -1415,7 +1428,7 @@ function initScene() {
   const camera = new THREE.PerspectiveCamera(
     55,
     el.canvasWrap.clientWidth / Math.max(el.canvasWrap.clientHeight, 1),
-    0.0001,
+    computeNearPlane(frame),
     Math.max(frame.dist + SKY_RADIUS * 12, 2500)
   );
   camera.position.set(frame.cameraX, frame.cameraY, frame.cameraZ);
@@ -1440,6 +1453,7 @@ function initScene() {
 
   viewCamera = camera;
   viewControls = controls;
+  window.__nav = { camera, controls };
 
   if (nav.viewpoint !== "free") {
     applyNavigationMode();
@@ -1500,6 +1514,77 @@ function initScene() {
     wrap.addEventListener(ev, e => e.preventDefault(), { passive: false });
   });
 
+  // Dolly-through in Free view + Free roam: OrbitControls dollies multiplicatively toward
+  // controls.target and stalls as radius -> 0. When radius drops below a floor while
+  // dollying in (wheel or pinch), push target (and camera when very close) forward along
+  // the view ray so the user can fly straight through the origin and keep going.
+  const DOLLY_FLOOR = 2.0;
+  const viewDir = new THREE.Vector3();
+  let prevOrbitDist = camera.position.distanceTo(controls.target);
+
+  function pushTargetForward(advance) {
+    if (!nav.freeRoam || nav.viewpoint !== "free" || advance <= 0) return;
+    viewDir.subVectors(controls.target, camera.position);
+    const len = viewDir.length();
+    if (len > 1e-8) {
+      viewDir.divideScalar(len);
+    } else {
+      camera.getWorldDirection(viewDir);
+    }
+    controls.target.addScaledVector(viewDir, advance);
+    if (len < DOLLY_FLOOR) {
+      camera.position.addScaledVector(viewDir, advance * 0.85);
+    }
+  }
+
+  renderer.domElement.addEventListener(
+    "wheel",
+    (e) => {
+      if (!nav.freeRoam || nav.viewpoint !== "free") return;
+      if (e.deltaY < 0) {
+        const d = camera.position.distanceTo(controls.target);
+        if (d < DOLLY_FLOOR * 2) {
+          pushTargetForward(Math.max(DOLLY_FLOOR * 0.6, d * 0.35));
+        }
+      }
+    },
+    { passive: true }
+  );
+
+  let pinchPrevSpan = 0;
+  renderer.domElement.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        pinchPrevSpan = Math.hypot(dx, dy);
+      } else {
+        pinchPrevSpan = 0;
+      }
+    },
+    { passive: true }
+  );
+
+  renderer.domElement.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!nav.freeRoam || nav.viewpoint !== "free" || e.touches.length !== 2) return;
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const span = Math.hypot(dx, dy);
+      if (pinchPrevSpan > 0 && span > pinchPrevSpan) {
+        const d = camera.position.distanceTo(controls.target);
+        if (d < DOLLY_FLOOR * 2) {
+          const ratio = (span - pinchPrevSpan) / Math.max(pinchPrevSpan, 1);
+          pushTargetForward(Math.max(DOLLY_FLOOR * 1.2 * ratio, 0.15));
+        }
+      }
+      pinchPrevSpan = span;
+    },
+    { passive: true }
+  );
+
   function maybeRefreshNear() {
     const dist = camera.position.distanceTo(controls.target);
     const wantNear = lod.mode === "near" ? dist < catalog.nearExit : dist < catalog.nearEnter;
@@ -1539,7 +1624,7 @@ function initScene() {
     const wantNear = lod.mode === "near" ? dist < catalog.nearExit : dist < catalog.nearEnter;
     if (!wantNear && lod.mode !== "near") return;
     let n = fillNear(controls.target);
-    if (n === 0 && lod.mode === "near" && !nav.freeRoam && nav.viewpoint === "free") {
+    if (n === 0 && !nav.freeRoam && nav.viewpoint === "free") {
       const snap = findStarNearRay(camera, controls.target);
       if (snap) {
         controls.target.copy(snap);
@@ -1559,9 +1644,20 @@ function initScene() {
   function animate() {
     requestAnimationFrame(animate);
     controls.update();
+    const curDist = camera.position.distanceTo(controls.target);
+    if (nav.freeRoam && nav.viewpoint === "free" && curDist < DOLLY_FLOOR && curDist < prevOrbitDist - 1e-5) {
+      viewDir.subVectors(controls.target, camera.position);
+      const len = viewDir.length();
+      if (len > 1e-8) {
+        viewDir.divideScalar(len);
+        const shift = DOLLY_FLOOR - curDist;
+        controls.target.addScaledVector(viewDir, shift);
+      }
+    }
+    prevOrbitDist = camera.position.distanceTo(controls.target);
     maybeRefreshNear();
     updateHygFade(camera);
-    trace.cameraDist = camera.position.distanceTo(controls.target);
+    trace.cameraDist = prevOrbitDist;
     if (trace.frame % 6 === 0) {
       updateHygLabels(camera, el.canvasWrap.clientWidth, el.canvasWrap.clientHeight);
     }
