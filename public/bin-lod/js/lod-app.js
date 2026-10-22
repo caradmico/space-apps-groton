@@ -284,7 +284,7 @@ function detectLayout(view, count) {
       xyzOk += 1;
     }
   }
-  return xyzOk / sample > 0.5 ? "radec" === "xyz" ? "radec" : "xyz" : "radec";
+  return xyzOk / sample > 0.5 ? "xyz" : "radec";
 }
 
 function readStar(view, i, out) {
@@ -636,7 +636,7 @@ function accumulateFrame(stats, pos) {
   if (pos.x < stats.minX) stats.minX = pos.x;
   if (pos.y < stats.minY) stats.minY = pos.y;
   if (pos.z < stats.minZ) stats.minZ = pos.z;
-  if (pos.x > stats.maxX) maxX: stats.maxX = pos.x;
+  if (pos.x > stats.maxX) stats.maxX = pos.x;
   if (pos.y > stats.maxY) stats.maxY = pos.y;
   if (pos.z > stats.maxZ) stats.maxZ = pos.z;
   const fx = pos.ux * SKY_RADIUS;
@@ -1453,7 +1453,7 @@ function initScene() {
 
   viewCamera = camera;
   viewControls = controls;
-  window.__nav = { camera, controls };
+  if (new URLSearchParams(location.search).has("debug")) window.__nav = { camera, controls };
 
   if (nav.viewpoint !== "free") {
     applyNavigationMode();
@@ -1624,7 +1624,7 @@ function initScene() {
     const wantNear = lod.mode === "near" ? dist < catalog.nearExit : dist < catalog.nearEnter;
     if (!wantNear && lod.mode !== "near") return;
     let n = fillNear(controls.target);
-    if (n === 0 && !nav.freeRoam && nav.viewpoint === "free") {
+    if (n === 0 && lod.mode === "near" && !nav.freeRoam && nav.viewpoint === "free") {
       const snap = findStarNearRay(camera, controls.target);
       if (snap) {
         controls.target.copy(snap);
