@@ -130,6 +130,21 @@ canvas {
   color: var(--text);
 }
 
+.search-chip input[type="search"] {
+  background: transparent;
+  color: var(--text);
+  border: none;
+  font: inherit;
+  font-weight: 500;
+  outline: none;
+  width: clamp(110px, 18vw, 175px);
+}
+
+.search-chip input[type="search"]::placeholder {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
 .toggle-chip input[type="checkbox"] {
   accent-color: var(--accent-strong);
   margin: 0;
@@ -259,4 +274,8 @@ canvas {
   text-shadow: 0 0 3px #000;
   white-space: nowrap;
   will-change: transform;
+}
+.planet-label {
+  color: #ffe08a;
+  font-weight: 600;
 }

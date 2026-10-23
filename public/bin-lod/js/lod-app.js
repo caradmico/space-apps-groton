@@ -44,6 +44,7 @@ const OFF_COLOR = 56;
 const OFF_MAG = 58;
 const UNIT = 206265;
 const AU_PER_PC = 206264.806;
+const SS_SCALE = 0.05; // Scaled solar-system frame: 1 AU = 0.05 pc (not to scale vs stars)
 const DEG2RAD = Math.PI / 180;
 const SKY_RADIUS = 100;
 const DETECT_SAMPLE = 512;
@@ -131,11 +132,54 @@ function computePlanetPosition(key, date = new Date()) {
   return {
     name: p.name,
     rAU,
+    xAU,
+    yAU,
+    zAU,
+    xScaled: xAU * SS_SCALE,
+    yScaled: yAU * SS_SCALE,
+    zScaled: zAU * SS_SCALE,
     xPc: xAU / AU_PER_PC,
     yPc: yAU / AU_PER_PC,
     zPc: zAU / AU_PER_PC,
   };
 }
+
+function getScaledPlanetPos(name, date = new Date()) {
+  if (!name) return null;
+  const k = String(name).trim().toLowerCase();
+  if (k === "sun" || k === "sol") return [0, 0, 0];
+  const p = computePlanetPosition(k, date);
+  if (!p) return null;
+  return [p.xScaled, p.yScaled, p.zScaled];
+}
+
+export function zoomStepFor(distance) {
+  const d = Number.isFinite(distance) && distance > 0 ? distance : 1;
+  return Math.max(1e-4, Math.min(d * 0.18, 400));
+}
+
+const PLANET_KEYS = ["mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune"];
+const PLANET_COLORS = {
+  sun:     [1.0, 0.92, 0.55],
+  mercury: [0.78, 0.76, 0.74],
+  venus:   [0.98, 0.88, 0.66],
+  earth:   [0.45, 0.75, 1.0],
+  mars:    [1.0, 0.52, 0.36],
+  jupiter: [0.95, 0.82, 0.66],
+  saturn:  [0.94, 0.86, 0.62],
+  uranus:  [0.62, 0.9, 0.95],
+  neptune: [0.46, 0.66, 1.0],
+};
+
+const solarSystem = {
+  points: null,
+  pos: null,
+  col: null,
+  size: null,
+  bodies: [],
+  labelLayer: null,
+  labelEls: [],
+};
 
 const hyg = { cutoffPc: 0, n: 0, maxDistPc: 0, pos: null, mag: null, names: [], named: [], points: null, alpha: 0, labels: 0, labelLayer: null, labelEls: [], error: "", bytes: 0 };
 
@@ -157,12 +201,18 @@ const el = {
   viewSelect: document.getElementById("viewpoint-select"),
   freeRoamToggle: document.getElementById("free-roam-toggle"),
   viewBanner: document.getElementById("viewpoint-banner"),
+  starSearch: document.getElementById("star-search"),
+  starSearchList: document.getElementById("star-search-list"),
 };
 
 const nav = {
   freeRoam: el.freeRoamToggle ? el.freeRoamToggle.checked : true,
   viewpoint: "free",
   viewpointLabel: "",
+  searchNotice: "",
+  lastZoomStep: 0,
+  nearestStarDist: Infinity,
+  nearestStarFrame: -999,
 };
 
 const catalog = {
@@ -1292,7 +1342,9 @@ function updateHud() {
       : [];
   const errNote = errLines.length ? `<br>${errLines.map(escapeHtml).join("<br>")}` : "";
   const vpLine = nav.viewpointLabel ? `<strong>${escapeHtml(nav.viewpointLabel)}</strong><br>` : "";
+  const searchLine = nav.searchNotice ? `<strong>${escapeHtml(nav.searchNotice)}</strong><br>` : "";
   setStatus(
+    searchLine +
     vpLine +
     `<strong>${catalog.count.toLocaleString()} records</strong> · ${mb} MiB loaded · ${tileNote} · 62 B LE · ${layoutNote}<br>` +
       `${farLine}${hygLine}<br>` +
@@ -1308,6 +1360,125 @@ function updateHud() {
   );
 }
 
+function makeSolarSystemPoints() {
+  if (solarSystem.points) return solarSystem.points;
+  const count = 1 + PLANET_KEYS.length;
+  solarSystem.pos = new Float32Array(count * 3);
+  solarSystem.col = new Float32Array(count * 3);
+  solarSystem.size = new Float32Array(count);
+  const pts = makePoints(solarSystem.pos, solarSystem.col, solarSystem.size, count);
+  pts.frustumCulled = false;
+  pts.visible = false;
+  pts.renderOrder = 3;
+  solarSystem.points = pts;
+  updateSolarSystemPositions();
+  return pts;
+}
+
+function updateSolarSystemPositions(date = new Date()) {
+  if (!solarSystem.pos) return;
+  const bodies = [];
+  // Index 0: Sun at origin
+  solarSystem.pos[0] = 0;
+  solarSystem.pos[1] = 0;
+  solarSystem.pos[2] = 0;
+  const sunCol = PLANET_COLORS.sun;
+  solarSystem.col[0] = sunCol[0];
+  solarSystem.col[1] = sunCol[1];
+  solarSystem.col[2] = sunCol[2];
+  solarSystem.size[0] = 7.5;
+  bodies.push({ key: "sun", name: "Sun", x: 0, y: 0, z: 0, rAU: 0 });
+
+  for (let i = 0; i < PLANET_KEYS.length; i++) {
+    const key = PLANET_KEYS[i];
+    const p = computePlanetPosition(key, date);
+    const idx = i + 1;
+    const x = p ? p.xScaled : 0;
+    const y = p ? p.yScaled : 0;
+    const z = p ? p.zScaled : 0;
+    solarSystem.pos[idx * 3] = x;
+    solarSystem.pos[idx * 3 + 1] = y;
+    solarSystem.pos[idx * 3 + 2] = z;
+    const rgb = PLANET_COLORS[key] || [0.9, 0.9, 1.0];
+    solarSystem.col[idx * 3] = rgb[0];
+    solarSystem.col[idx * 3 + 1] = rgb[1];
+    solarSystem.col[idx * 3 + 2] = rgb[2];
+    solarSystem.size[idx] = 5.0;
+    bodies.push({
+      key,
+      name: p ? p.name : key,
+      x,
+      y,
+      z,
+      rAU: p ? p.rAU : 0,
+    });
+  }
+  solarSystem.bodies = bodies;
+  if (solarSystem.points) {
+    const geo = solarSystem.points.geometry;
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.color.needsUpdate = true;
+    geo.attributes.aSize.needsUpdate = true;
+    geo.setDrawRange(0, bodies.length);
+  }
+}
+
+function ensureSolarSystemLabelLayer(parent) {
+  if (!solarSystem.labelLayer) {
+    solarSystem.labelLayer = document.createElement("div");
+    solarSystem.labelLayer.className = "star-labels";
+    parent.appendChild(solarSystem.labelLayer);
+  }
+  return solarSystem.labelLayer;
+}
+
+function updateSolarSystemVisibility() {
+  const show = nav.viewpoint !== "free";
+  if (solarSystem.points) {
+    if (show) updateSolarSystemPositions();
+    solarSystem.points.visible = show;
+  }
+  if (!show && solarSystem.labelEls.length) {
+    for (const el of solarSystem.labelEls) el.style.display = "none";
+  }
+}
+
+function updateSolarSystemLabels(camera, width, height) {
+  const show = nav.viewpoint !== "free";
+  if (!show || !solarSystem.labelLayer || !solarSystem.points || !solarSystem.points.visible) {
+    for (const el of solarSystem.labelEls) el.style.display = "none";
+    return;
+  }
+  updateSolarSystemLabels.v ||= new THREE.Vector3();
+  const v = updateSolarSystemLabels.v;
+  let shown = 0;
+  for (let i = 0; i < solarSystem.bodies.length; i++) {
+    const b = solarSystem.bodies[i];
+    if (b.key === nav.viewpoint) continue; // Camera is on this planet
+    v.set(b.x, b.y, b.z);
+    v.project(camera);
+    const x = v.x, y = v.y, z = v.z;
+    if (z <= -1 || z >= 1 || Math.abs(x) > 1 || Math.abs(y) > 1) continue;
+    const sx = (x + 1) / 2 * width;
+    const sy = (1 - y) / 2 * height;
+    let lbl = solarSystem.labelEls[shown];
+    if (!lbl) {
+      lbl = document.createElement("span");
+      lbl.className = "star-label planet-label";
+      solarSystem.labelLayer.appendChild(lbl);
+      solarSystem.labelEls.push(lbl);
+    }
+    if (lbl.textContent !== b.name) lbl.textContent = b.name;
+    lbl.style.transform = `translate(${sx | 0}px, ${sy | 0}px)`;
+    lbl.style.display = "block";
+    lbl.style.opacity = "1";
+    shown++;
+  }
+  for (let i = shown; i < solarSystem.labelEls.length; i++) {
+    solarSystem.labelEls[i].style.display = "none";
+  }
+}
+
 function computeNearPlane(frame) {
   return nav.freeRoam || nav.viewpoint !== "free"
     ? 0.0001
@@ -1321,21 +1492,56 @@ function applyNavigationMode() {
   const maxDist = Math.max(frame.extent * 14, frame.dist * 6, skyReach);
   const clampedMinDist = Math.max(frame.extent * 0.12, 0.4);
 
+  updateSolarSystemVisibility();
+
+  if (nav.viewpoint === "solar") {
+    nav.searchNotice = "";
+    updateSolarSystemPositions();
+    // Frame the whole scaled solar system (Neptune ~ 30 AU * 0.05 pc/AU = 1.5 pc)
+    const sysRadius = 30.2 * SS_SCALE;
+    const fov = (viewCamera.fov || 55) * DEG2RAD;
+    const camDist = (sysRadius * 1.45) / Math.tan(fov * 0.5);
+    viewControls.target.set(0, 0, 0);
+    viewCamera.position.set(0, -camDist * 0.65, camDist * 0.76);
+    viewCamera.lookAt(0, 0, 0);
+    viewControls.minDistance = 0;
+    viewControls.maxDistance = maxDist;
+    viewControls.enableZoom = false;
+    viewControls.enablePan = true;
+    viewControls.rotateSpeed = 1.0;
+    viewCamera.near = 0.0001;
+    viewCamera.updateProjectionMatrix();
+    viewControls.update();
+
+    const label = `Solar system (scaled: 1 AU = ${SS_SCALE} pc, not to scale vs stars · Neptune ≈ ${(30.07 * SS_SCALE).toFixed(2)} pc)`;
+    nav.viewpointLabel = label;
+    if (el.viewBanner) {
+      el.viewBanner.textContent = label;
+      el.viewBanner.hidden = false;
+    }
+    updateHud();
+    nearRefresh();
+    return;
+  }
+
   if (nav.viewpoint !== "free") {
     const p = computePlanetPosition(nav.viewpoint);
     if (p) {
-      // First-person look-around from planet heliocentric position in parsecs
+      // First-person look-around from planet's SCALED position in the solar-system frame (1 AU = SS_SCALE pc)
       const lookAhead = 1e-4;
-      viewCamera.position.set(p.xPc, p.yPc, p.zPc);
+      const px = p.xScaled;
+      const py = p.yScaled;
+      const pz = p.zScaled;
+      viewCamera.position.set(px, py, pz);
       // Aim outward from the Sun (or default galactic center direction)
-      const rLen = Math.hypot(p.xPc, p.yPc, p.zPc);
-      const dx = rLen > 0 ? p.xPc / rLen : 0;
-      const dy = rLen > 0 ? p.yPc / rLen : -0.98;
-      const dz = rLen > 0 ? p.zPc / rLen : -0.17;
+      const rLen = Math.hypot(px, py, pz);
+      const dx = rLen > 0 ? px / rLen : 0;
+      const dy = rLen > 0 ? py / rLen : -0.98;
+      const dz = rLen > 0 ? pz / rLen : -0.17;
       viewControls.target.set(
-        p.xPc + dx * lookAhead,
-        p.yPc + dy * lookAhead,
-        p.zPc + dz * lookAhead
+        px + dx * lookAhead,
+        py + dy * lookAhead,
+        pz + dz * lookAhead
       );
       viewControls.minDistance = lookAhead;
       viewControls.maxDistance = lookAhead;
@@ -1346,7 +1552,7 @@ function applyNavigationMode() {
       viewCamera.updateProjectionMatrix();
       viewControls.update();
 
-      const label = `Viewing from ${p.name} (approx. ${p.rAU.toFixed(2)} AU from Sun)`;
+      const label = `Viewing from ${p.name} (approx. ${p.rAU.toFixed(2)} AU from Sun · solar system drawn at 1 AU = ${SS_SCALE} pc)`;
       nav.viewpointLabel = label;
       if (el.viewBanner) {
         el.viewBanner.textContent = label;
@@ -1358,14 +1564,16 @@ function applyNavigationMode() {
     }
   }
 
-  nav.viewpointLabel = "";
-  if (el.viewBanner) {
-    el.viewBanner.textContent = "";
-    el.viewBanner.hidden = true;
+  if (!nav.searchNotice) {
+    nav.viewpointLabel = "";
+    if (el.viewBanner) {
+      el.viewBanner.textContent = "";
+      el.viewBanner.hidden = true;
+    }
   }
   viewControls.minDistance = nav.freeRoam ? 0 : clampedMinDist;
   viewControls.maxDistance = maxDist;
-  viewControls.enableZoom = true;
+  viewControls.enableZoom = false;
   viewControls.enablePan = true;
   viewControls.rotateSpeed = 1.0;
   viewCamera.near = computeNearPlane(frame);
@@ -1375,6 +1583,7 @@ function applyNavigationMode() {
 
 function setViewpoint(value) {
   nav.viewpoint = value || "free";
+  nav.searchNotice = "";
   if (el.viewSelect && el.viewSelect.value !== nav.viewpoint) {
     el.viewSelect.value = nav.viewpoint;
   }
@@ -1417,8 +1626,226 @@ if (el.freeRoamToggle) {
   });
 }
 
+function populateSearchSuggestions() {
+  if (!el.starSearchList || !hyg.named.length) return;
+  el.starSearchList.innerHTML = "";
+  const cap = Math.min(hyg.named.length, 250);
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < cap; i++) {
+    const idx = hyg.named[i];
+    const name = hyg.names[idx];
+    if (!name) continue;
+    const opt = document.createElement("option");
+    opt.value = name;
+    frag.appendChild(opt);
+  }
+  el.starSearchList.appendChild(frag);
+}
+
+function searchStarCatalog(rawQuery) {
+  const q = String(rawQuery == null ? "" : rawQuery).trim();
+  if (!q) return { hit: false, name: "", pos: null };
+
+  // Check HIP / HD prefix first
+  if (/^(hip|hd)\b/i.test(q) || /^(hip|hd)\s*\d+/i.test(q)) {
+    nav.searchNotice = "HIP/HD IDs not in this dataset";
+    if (el.viewBanner) {
+      el.viewBanner.textContent = nav.searchNotice;
+      el.viewBanner.hidden = false;
+    }
+    updateHud();
+    return { hit: false, name: "", pos: null, reason: "HIP/HD IDs not in this dataset" };
+  }
+
+  let hitName = "";
+  let hitPos = null;
+
+  // 1) All-digit query (>= 6 digits): linear scan of loaded tile buffers for int64 LE Gaia DR3 source_id at offset 0
+  if (/^\d{6,}$/.test(q) && catalog.view && catalog.count > 0) {
+    let targetId = null;
+    try {
+      targetId = BigInt(q);
+    } catch (_) {
+      targetId = null;
+    }
+    if (targetId !== null) {
+      const view = catalog.view;
+      const total = catalog.count;
+      const pos = scratch;
+      for (let i = 0; i < total; i++) {
+        const sid = view.getBigInt64(i * RECORD_SIZE, true);
+        if (sid === targetId) {
+          if (readStar(view, i, pos)) {
+            hitName = `Gaia DR3 ${q}`;
+            hitPos = [pos.x, pos.y, pos.z];
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // 2) HYG name search: case-insensitive exact -> prefix -> substring
+  if (!hitPos && hyg.n > 0 && hyg.names && hyg.pos) {
+    const ql = q.toLowerCase();
+    let bestIdx = -1;
+    // Check named list (already sorted brightest first)
+    for (let k = 0; k < hyg.named.length; k++) {
+      const idx = hyg.named[k];
+      const nm = hyg.names[idx];
+      if (nm && nm.toLowerCase() === ql) {
+        bestIdx = idx;
+        break;
+      }
+    }
+    if (bestIdx < 0) {
+      for (let k = 0; k < hyg.named.length; k++) {
+        const idx = hyg.named[k];
+        const nm = hyg.names[idx];
+        if (nm && nm.toLowerCase().startsWith(ql)) {
+          bestIdx = idx;
+          break;
+        }
+      }
+    }
+    if (bestIdx < 0) {
+      for (let k = 0; k < hyg.named.length; k++) {
+        const idx = hyg.named[k];
+        const nm = hyg.names[idx];
+        if (nm && nm.toLowerCase().includes(ql)) {
+          bestIdx = idx;
+          break;
+        }
+      }
+    }
+    if (bestIdx >= 0) {
+      hitName = hyg.names[bestIdx];
+      hitPos = [
+        hyg.pos[bestIdx * 3],
+        hyg.pos[bestIdx * 3 + 1],
+        hyg.pos[bestIdx * 3 + 2],
+      ];
+    }
+  }
+
+  if (!hitPos) {
+    nav.searchNotice = `No star found for "${q}"`;
+    if (el.viewBanner) {
+      el.viewBanner.textContent = nav.searchNotice;
+      el.viewBanner.hidden = false;
+    }
+    updateHud();
+    return { hit: false, name: "", pos: null };
+  }
+
+  // Stop any planet / solar system view -> set viewpoint to Free view
+  nav.viewpoint = "free";
+  if (el.viewSelect && el.viewSelect.value !== "free") {
+    el.viewSelect.value = "free";
+  }
+
+  const [sx, sy, sz] = hitPos;
+  const distFromSun = Math.hypot(sx, sy, sz);
+  const label = `Star: ${hitName} · d=${distFromSun.toFixed(2)} pc`;
+  nav.viewpointLabel = label;
+  nav.searchNotice = label;
+  if (el.viewBanner) {
+    el.viewBanner.textContent = label;
+    el.viewBanner.hidden = false;
+  }
+
+  if (viewCamera && viewControls && catalog.frame) {
+    applyNavigationMode();
+    // Determine current view direction (camera -> target), fallback to Sun->star or +Z
+    const dir = new THREE.Vector3().subVectors(viewControls.target, viewCamera.position);
+    if (dir.lengthSq() < 1e-10) {
+      viewCamera.getWorldDirection(dir);
+    }
+    if (dir.lengthSq() < 1e-10) {
+      dir.set(0, 0, -1);
+    } else {
+      dir.normalize();
+    }
+    // Sensible standoff distance: max(0.05, min(0.5, 2% of distance from Sun))
+    const standoff = Math.max(0.05, Math.min(0.5, distFromSun > 0 ? distFromSun * 0.02 : 0.5));
+    viewControls.target.set(sx, sy, sz);
+    viewCamera.position.set(
+      sx - dir.x * standoff,
+      sy - dir.y * standoff,
+      sz - dir.z * standoff
+    );
+    viewCamera.lookAt(sx, sy, sz);
+    viewCamera.updateProjectionMatrix();
+    viewControls.update();
+    nearRefresh();
+  }
+  updateHud();
+
+  return { hit: true, name: hitName, pos: [sx, sy, sz] };
+}
+
+if (el.starSearch) {
+  el.starSearch.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      searchStarCatalog(el.starSearch.value);
+    }
+  });
+  el.starSearch.addEventListener("change", () => {
+    if (el.starSearch.value.trim()) {
+      searchStarCatalog(el.starSearch.value);
+    }
+  });
+  el.starSearch.addEventListener("search", () => {
+    if (el.starSearch.value.trim()) {
+      searchStarCatalog(el.starSearch.value);
+    }
+  });
+}
+
+function computeNearestLocalDistance(camera, controls, frameIdx) {
+  const distToTarget = camera.position.distanceTo(controls.target);
+  if (frameIdx - nav.nearestStarFrame >= 4) {
+    nav.nearestStarFrame = frameIdx;
+    const cx = camera.position.x;
+    const cy = camera.position.y;
+    const cz = camera.position.z;
+    let bestD2 = Infinity;
+    if (hyg.pos && hyg.n > 0) {
+      const p = hyg.pos;
+      const n3 = hyg.n * 3;
+      for (let i = 0; i < n3; i += 3) {
+        const dx = p[i] - cx;
+        const dy = p[i + 1] - cy;
+        const dz = p[i + 2] - cz;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bestD2) bestD2 = d2;
+      }
+    }
+    if (gpu.nearPos && lod.nearCount > 0) {
+      const p = gpu.nearPos;
+      const n3 = lod.nearCount * 3;
+      for (let i = 0; i < n3; i += 3) {
+        const dx = p[i] - cx;
+        const dy = p[i + 1] - cy;
+        const dz = p[i + 2] - cz;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < bestD2) bestD2 = d2;
+      }
+    }
+    nav.nearestStarDist = bestD2 < Infinity ? Math.sqrt(bestD2) : Infinity;
+  }
+  const dStar = nav.nearestStarDist;
+  const dRef = Math.min(
+    distToTarget > 1e-6 ? distToTarget : Infinity,
+    dStar > 1e-6 ? dStar : Infinity
+  );
+  return Number.isFinite(dRef) ? dRef : Math.max(distToTarget, 0.1);
+}
+
 function initScene() {
   if (sceneStarted) return;
+  trace.frame = 0;
   const frame = catalog.frame;
   const scene = new THREE.Scene();
   const fogDist = catalog.tileTotal > 1 ? Math.max(frame.dist, SKY_RADIUS * 2) : frame.dist;
@@ -1448,12 +1875,25 @@ function initScene() {
   controls.maxDistance = Math.max(frame.extent * 14, frame.dist * 6, skyReach);
   controls.target.set(frame.targetX, frame.targetY, frame.targetZ);
   controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
-  controls.enableZoom = true;
+  controls.enableZoom = false;
   controls.zoomSpeed = 1.2;
 
   viewCamera = camera;
   viewControls = controls;
-  if (new URLSearchParams(location.search).has("debug")) window.__nav = { camera, controls };
+  if (new URLSearchParams(location.search).has("debug")) {
+    window.__nav = {
+      camera,
+      controls,
+      lastZoomStep: 0,
+      zoomStepFor,
+      search: searchStarCatalog,
+      planetPos: getScaledPlanetPos,
+    };
+  }
+
+  const ssPoints = makeSolarSystemPoints();
+  if (ssPoints) scene.add(ssPoints);
+  ensureSolarSystemLabelLayer(el.canvasWrap);
 
   if (nav.viewpoint !== "free") {
     applyNavigationMode();
@@ -1496,6 +1936,7 @@ function initScene() {
     const pts = makeHygPoints();
     if (pts) scene.add(pts);
     ensureHygLabelLayer(el.canvasWrap);
+    populateSearchSuggestions();
   };
   attachHyg();
 
@@ -1514,41 +1955,65 @@ function initScene() {
     wrap.addEventListener(ev, e => e.preventDefault(), { passive: false });
   });
 
-  // Dolly-through in Free view + Free roam: OrbitControls dollies multiplicatively toward
-  // controls.target and stalls as radius -> 0. When radius drops below a floor while
-  // dollying in (wheel or pinch), push target (and camera when very close) forward along
-  // the view ray so the user can fly straight through the origin and keep going.
-  const DOLLY_FLOOR = 2.0;
+  // Unified distance-scaled (exponential) zoom + fly-through dolly along the view ray.
+  // OrbitControls zoom is disabled; wheel and two-finger pinch move the camera by
+  // step = zoomStepFor(dRef) * notches (with dRef = min(dist to target, dist to nearest star)).
+  // When Free roam is enabled and the camera approaches controls.target, target is pushed
+  // forward along the view ray so the camera flies smoothly through the origin and beyond.
+  const DOLLY_FLOOR = 0.25;
   const viewDir = new THREE.Vector3();
-  let prevOrbitDist = camera.position.distanceTo(controls.target);
 
-  function pushTargetForward(advance) {
-    if (!nav.freeRoam || nav.viewpoint !== "free" || advance <= 0) return;
+  function applyZoomDolly(notches) {
+    if (nav.viewpoint !== "free" && nav.viewpoint !== "solar") return;
+    if (!Number.isFinite(notches) || Math.abs(notches) < 1e-6) return;
+
+    const dRef = computeNearestLocalDistance(camera, controls, trace.frame || 0);
+    const baseStep = zoomStepFor(dRef);
+    const signedMove = baseStep * notches;
+    const stepMag = Math.abs(signedMove);
+    nav.lastZoomStep = stepMag;
+    if (window.__nav) window.__nav.lastZoomStep = stepMag;
+
     viewDir.subVectors(controls.target, camera.position);
-    const len = viewDir.length();
-    if (len > 1e-8) {
-      viewDir.divideScalar(len);
+    const distToTarget = viewDir.length();
+    if (distToTarget > 1e-8) {
+      viewDir.divideScalar(distToTarget);
     } else {
       camera.getWorldDirection(viewDir);
     }
-    controls.target.addScaledVector(viewDir, advance);
-    if (len < DOLLY_FLOOR) {
-      camera.position.addScaledVector(viewDir, advance * 0.85);
+
+    const canFlyThrough = nav.freeRoam && nav.viewpoint === "free";
+    if (signedMove > 0) {
+      // Zooming in (moving forward along viewDir)
+      if (canFlyThrough) {
+        camera.position.addScaledVector(viewDir, signedMove);
+        const remaining = distToTarget - signedMove;
+        if (remaining < DOLLY_FLOOR) {
+          controls.target.copy(camera.position).addScaledVector(viewDir, DOLLY_FLOOR);
+        }
+      } else {
+        const minDist = Math.max(controls.minDistance || 0, 0.02);
+        const maxAdvance = Math.max(0, distToTarget - minDist);
+        const advance = Math.min(signedMove, maxAdvance);
+        camera.position.addScaledVector(viewDir, advance);
+      }
+    } else {
+      // Zooming out (moving backward along viewDir)
+      const retreat = Math.min(-signedMove, controls.maxDistance || 1e6);
+      camera.position.addScaledVector(viewDir, -retreat);
     }
   }
 
   renderer.domElement.addEventListener(
     "wheel",
     (e) => {
-      if (!nav.freeRoam || nav.viewpoint !== "free") return;
-      if (e.deltaY < 0) {
-        const d = camera.position.distanceTo(controls.target);
-        if (d < DOLLY_FLOOR * 2) {
-          pushTargetForward(Math.max(DOLLY_FLOOR * 0.6, d * 0.35));
-        }
-      }
+      if (nav.viewpoint !== "free" && nav.viewpoint !== "solar") return;
+      e.preventDefault();
+      const raw = e.deltaMode === 1 ? e.deltaY * 32 : e.deltaY;
+      const notches = Math.max(-4, Math.min(4, -raw / 100));
+      applyZoomDolly(notches);
     },
-    { passive: true }
+    { passive: false }
   );
 
   let pinchPrevSpan = 0;
@@ -1569,15 +2034,14 @@ function initScene() {
   renderer.domElement.addEventListener(
     "touchmove",
     (e) => {
-      if (!nav.freeRoam || nav.viewpoint !== "free" || e.touches.length !== 2) return;
+      if ((nav.viewpoint !== "free" && nav.viewpoint !== "solar") || e.touches.length !== 2) return;
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const span = Math.hypot(dx, dy);
-      if (pinchPrevSpan > 0 && span > pinchPrevSpan) {
-        const d = camera.position.distanceTo(controls.target);
-        if (d < DOLLY_FLOOR * 2) {
-          const ratio = (span - pinchPrevSpan) / Math.max(pinchPrevSpan, 1);
-          pushTargetForward(Math.max(DOLLY_FLOOR * 1.2 * ratio, 0.15));
+      if (pinchPrevSpan > 0 && span > 0) {
+        const notches = Math.log(span / pinchPrevSpan) * 3.5;
+        if (Math.abs(notches) > 1e-4) {
+          applyZoomDolly(notches);
         }
       }
       pinchPrevSpan = span;
@@ -1645,21 +2109,14 @@ function initScene() {
     requestAnimationFrame(animate);
     controls.update();
     const curDist = camera.position.distanceTo(controls.target);
-    if (nav.freeRoam && nav.viewpoint === "free" && curDist < DOLLY_FLOOR && curDist < prevOrbitDist - 1e-5) {
-      viewDir.subVectors(controls.target, camera.position);
-      const len = viewDir.length();
-      if (len > 1e-8) {
-        viewDir.divideScalar(len);
-        const shift = DOLLY_FLOOR - curDist;
-        controls.target.addScaledVector(viewDir, shift);
-      }
-    }
-    prevOrbitDist = camera.position.distanceTo(controls.target);
     maybeRefreshNear();
     updateHygFade(camera);
-    trace.cameraDist = prevOrbitDist;
-    if (trace.frame % 6 === 0) {
-      updateHygLabels(camera, el.canvasWrap.clientWidth, el.canvasWrap.clientHeight);
+    trace.cameraDist = curDist;
+    if ((trace.frame || 0) % 6 === 0) {
+      const cw = el.canvasWrap.clientWidth;
+      const ch = el.canvasWrap.clientHeight;
+      updateHygLabels(camera, cw, ch);
+      updateSolarSystemLabels(camera, cw, ch);
     }
     renderer.render(scene, camera);
     trace.pointsDrawn = renderer.info.render.points;
