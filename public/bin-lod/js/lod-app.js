@@ -153,8 +153,20 @@ function getScaledPlanetPos(name, date = new Date()) {
   return [p.xScaled, p.yScaled, p.zScaled];
 }
 
-export function zoomStepFor(distance) {
+function getRealPlanetPos(name, date = new Date()) {
+  if (!name) return null;
+  const k = String(name).trim().toLowerCase();
+  if (k === "sun" || k === "sol") return [0, 0, 0];
+  const p = computePlanetPosition(k, date);
+  if (!p) return null;
+  return [p.xPc, p.yPc, p.zPc];
+}
+
+export function zoomStepFor(distance, distFromSun) {
   const d = Number.isFinite(distance) && distance > 0 ? distance : 1;
+  if (Number.isFinite(distFromSun) && distFromSun > 5) {
+    return Math.min(400, Math.max(0.02 * distFromSun, Math.min(d * 0.18, 400)));
+  }
   return Math.max(1e-4, Math.min(d * 0.18, 400));
 }
 
@@ -200,6 +212,7 @@ const el = {
   canvasWrap: document.getElementById("canvas-wrap"),
   viewSelect: document.getElementById("viewpoint-select"),
   freeRoamToggle: document.getElementById("free-roam-toggle"),
+  flyToSunBtn: document.getElementById("fly-to-sun"),
   viewBanner: document.getElementById("viewpoint-banner"),
   starSearch: document.getElementById("star-search"),
   starSearchList: document.getElementById("star-search-list"),
@@ -1342,7 +1355,10 @@ function updateHud() {
       : [];
   const errNote = errLines.length ? `<br>${errLines.map(escapeHtml).join("<br>")}` : "";
   const vpLine = nav.viewpointLabel ? `<strong>${escapeHtml(nav.viewpointLabel)}</strong><br>` : "";
-  const searchLine = nav.searchNotice ? `<strong>${escapeHtml(nav.searchNotice)}</strong><br>` : "";
+  const searchLine =
+    nav.searchNotice && nav.searchNotice !== nav.viewpointLabel
+      ? `<strong>${escapeHtml(nav.searchNotice)}</strong><br>`
+      : "";
   setStatus(
     searchLine +
     vpLine +
@@ -1527,11 +1543,11 @@ function applyNavigationMode() {
   if (nav.viewpoint !== "free") {
     const p = computePlanetPosition(nav.viewpoint);
     if (p) {
-      // First-person look-around from planet's SCALED position in the solar-system frame (1 AU = SS_SCALE pc)
+      // First-person look-around from planet's REAL-scale heliocentric position (AU / 206264.806 pc)
       const lookAhead = 1e-4;
-      const px = p.xScaled;
-      const py = p.yScaled;
-      const pz = p.zScaled;
+      const px = p.xPc;
+      const py = p.yPc;
+      const pz = p.zPc;
       viewCamera.position.set(px, py, pz);
       // Aim outward from the Sun (or default galactic center direction)
       const rLen = Math.hypot(px, py, pz);
@@ -1552,7 +1568,7 @@ function applyNavigationMode() {
       viewCamera.updateProjectionMatrix();
       viewControls.update();
 
-      const label = `Viewing from ${p.name} (approx. ${p.rAU.toFixed(2)} AU from Sun · solar system drawn at 1 AU = ${SS_SCALE} pc)`;
+      const label = `Viewing from ${p.name} (approx. ${p.rAU.toFixed(2)} AU from Sun · solar system markers scaled: 1 AU = ${SS_SCALE} pc)`;
       nav.viewpointLabel = label;
       if (el.viewBanner) {
         el.viewBanner.textContent = label;
@@ -1620,23 +1636,124 @@ if (el.viewSelect) {
   });
 }
 
+let flyAnimId = 0;
+
+function flyToSun(durationMs = 1200) {
+  if (!viewCamera || !viewControls || !catalog.frame) return;
+  if (flyAnimId) {
+    cancelAnimationFrame(flyAnimId);
+    flyAnimId = 0;
+  }
+  nav.viewpoint = "free";
+  nav.searchNotice = "";
+  nav.viewpointLabel = "";
+  if (el.viewSelect && el.viewSelect.value !== "free") {
+    el.viewSelect.value = "free";
+  }
+  if (el.viewBanner) {
+    el.viewBanner.textContent = "";
+    el.viewBanner.hidden = true;
+  }
+  applyNavigationMode();
+
+  const startPos = viewCamera.position.clone();
+  const startTarget = viewControls.target.clone();
+  const endTarget = new THREE.Vector3(0, 0, 0);
+
+  // Keep current camera -> target view direction (or fallback to radial from origin)
+  const dir = new THREE.Vector3().subVectors(startTarget, startPos);
+  if (dir.lengthSq() < 1e-8) {
+    viewCamera.getWorldDirection(dir);
+  }
+  if (dir.lengthSq() < 1e-8) {
+    dir.set(0, 0.65, -0.76);
+  }
+  dir.normalize();
+
+  const sunDist = Math.max(0.05, (viewControls.minDistance || 0) * 1.05);
+  const endPos = new THREE.Vector3().copy(endTarget).addScaledVector(dir, -sunDist);
+
+  if (durationMs <= 0) {
+    viewControls.target.copy(endTarget);
+    viewCamera.position.copy(endPos);
+    viewCamera.lookAt(endTarget);
+    viewControls.update();
+    nearRefresh();
+    updateHud();
+    return;
+  }
+
+  const t0 = performance.now();
+  function step(now) {
+    const raw = Math.min(1, (now - t0) / durationMs);
+    const ease = raw < 0.5 ? 2 * raw * raw : 1 - Math.pow(-2 * raw + 2, 2) / 2;
+    viewCamera.position.lerpVectors(startPos, endPos, ease);
+    viewControls.target.lerpVectors(startTarget, endTarget, ease);
+    viewControls.update();
+    if (raw < 1) {
+      flyAnimId = requestAnimationFrame(step);
+    } else {
+      flyAnimId = 0;
+      nearRefresh();
+      updateHud();
+    }
+  }
+  flyAnimId = requestAnimationFrame(step);
+}
+
 if (el.freeRoamToggle) {
   el.freeRoamToggle.addEventListener("change", (e) => {
     setFreeRoam(e.target.checked);
   });
 }
 
+if (el.flyToSunBtn) {
+  el.flyToSunBtn.addEventListener("click", () => {
+    flyToSun(1200);
+  });
+}
+
+const STAR_ALIASES = {
+  "alpha centauri": ["Rigil Kentaurus", "Rigil Kent", "Alpha Centauri", "Toliman"],
+  "alpha cen": ["Rigil Kentaurus", "Rigil Kent", "Alpha Centauri", "Toliman"],
+  "rigil kentaurus": ["Rigil Kentaurus", "Rigil Kent", "Alpha Centauri", "Toliman"],
+  "rigel kent": ["Rigil Kentaurus", "Rigil Kent", "Alpha Centauri", "Toliman"],
+  "toliman": ["Rigil Kentaurus", "Rigil Kent", "Alpha Centauri", "Toliman"],
+  "proxima": ["Proxima Centauri"],
+  "proxima centauri": ["Proxima Centauri"],
+  "polaris": ["Polaris"],
+  "north star": ["Polaris"],
+  "pole star": ["Polaris"],
+  "dog star": ["Sirius"],
+  "barnard's star": ["Barnard's Star"],
+  "barnards star": ["Barnard's Star"],
+  "alpha lyrae": ["Vega"],
+  "alpha orionis": ["Betelgeuse"],
+  "beta orionis": ["Rigel"],
+};
+
 function populateSearchSuggestions() {
   if (!el.starSearchList || !hyg.named.length) return;
   el.starSearchList.innerHTML = "";
   const cap = Math.min(hyg.named.length, 250);
   const frag = document.createDocumentFragment();
+  const seen = new Set();
   for (let i = 0; i < cap; i++) {
     const idx = hyg.named[i];
     const name = hyg.names[idx];
     if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     const opt = document.createElement("option");
     opt.value = name;
+    frag.appendChild(opt);
+  }
+  for (const aliasKey of Object.keys(STAR_ALIASES)) {
+    if (seen.has(aliasKey)) continue;
+    seen.add(aliasKey);
+    const opt = document.createElement("option");
+    opt.value = aliasKey;
     frag.appendChild(opt);
   }
   el.starSearchList.appendChild(frag);
@@ -1685,17 +1802,43 @@ function searchStarCatalog(rawQuery) {
     }
   }
 
-  // 2) HYG name search: case-insensitive exact -> prefix -> substring
+  // 2) HYG name search: alias resolution -> case-insensitive exact -> prefix -> substring
   if (!hitPos && hyg.n > 0 && hyg.names && hyg.pos) {
     const ql = q.toLowerCase();
     let bestIdx = -1;
+    const aliasCandidates = STAR_ALIASES[ql];
+    if (aliasCandidates) {
+      for (let c = 0; c < aliasCandidates.length && bestIdx < 0; c++) {
+        const cand = aliasCandidates[c].toLowerCase();
+        for (let k = 0; k < hyg.named.length; k++) {
+          const idx = hyg.named[k];
+          const nm = hyg.names[idx];
+          if (nm && nm.toLowerCase() === cand) {
+            bestIdx = idx;
+            break;
+          }
+        }
+        if (bestIdx < 0) {
+          for (let k = 0; k < hyg.named.length; k++) {
+            const idx = hyg.named[k];
+            const nm = hyg.names[idx];
+            if (nm && nm.toLowerCase().startsWith(cand)) {
+              bestIdx = idx;
+              break;
+            }
+          }
+        }
+      }
+    }
     // Check named list (already sorted brightest first)
-    for (let k = 0; k < hyg.named.length; k++) {
-      const idx = hyg.named[k];
-      const nm = hyg.names[idx];
-      if (nm && nm.toLowerCase() === ql) {
-        bestIdx = idx;
-        break;
+    if (bestIdx < 0) {
+      for (let k = 0; k < hyg.named.length; k++) {
+        const idx = hyg.named[k];
+        const nm = hyg.names[idx];
+        if (nm && nm.toLowerCase() === ql) {
+          bestIdx = idx;
+          break;
+        }
       }
     }
     if (bestIdx < 0) {
@@ -1754,6 +1897,7 @@ function searchStarCatalog(rawQuery) {
     el.viewBanner.hidden = false;
   }
 
+  let finalStandoff = Math.max(0.05, Math.min(0.5, distFromSun > 0 ? distFromSun * 0.02 : 0.5));
   if (viewCamera && viewControls && catalog.frame) {
     applyNavigationMode();
     // Determine current view direction (camera -> target), fallback to Sun->star or +Z
@@ -1766,22 +1910,23 @@ function searchStarCatalog(rawQuery) {
     } else {
       dir.normalize();
     }
-    // Sensible standoff distance: max(0.05, min(0.5, 2% of distance from Sun))
-    const standoff = Math.max(0.05, Math.min(0.5, distFromSun > 0 ? distFromSun * 0.02 : 0.5));
+    // Sensible standoff distance: max(0.05, min(0.5, 2% of distance from Sun)), respecting minDistance
+    finalStandoff = Math.max(finalStandoff, (viewControls.minDistance || 0) * 1.05);
     viewControls.target.set(sx, sy, sz);
     viewCamera.position.set(
-      sx - dir.x * standoff,
-      sy - dir.y * standoff,
-      sz - dir.z * standoff
+      sx - dir.x * finalStandoff,
+      sy - dir.y * finalStandoff,
+      sz - dir.z * finalStandoff
     );
     viewCamera.lookAt(sx, sy, sz);
     viewCamera.updateProjectionMatrix();
     viewControls.update();
+    finalStandoff = viewCamera.position.distanceTo(viewControls.target);
     nearRefresh();
   }
   updateHud();
 
-  return { hit: true, name: hitName, pos: [sx, sy, sz] };
+  return { hit: true, name: hitName, pos: [sx, sy, sz], standoff: finalStandoff };
 }
 
 if (el.starSearch) {
@@ -1888,6 +2033,8 @@ function initScene() {
       zoomStepFor,
       search: searchStarCatalog,
       planetPos: getScaledPlanetPos,
+      planetPosReal: getRealPlanetPos,
+      flyToSun,
     };
   }
 
@@ -1968,7 +2115,8 @@ function initScene() {
     if (!Number.isFinite(notches) || Math.abs(notches) < 1e-6) return;
 
     const dRef = computeNearestLocalDistance(camera, controls, trace.frame || 0);
-    const baseStep = zoomStepFor(dRef);
+    const distFromSun = camera.position.length();
+    const baseStep = zoomStepFor(dRef, distFromSun);
     const signedMove = baseStep * notches;
     const stepMag = Math.abs(signedMove);
     nav.lastZoomStep = stepMag;
