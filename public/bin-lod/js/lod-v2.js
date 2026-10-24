@@ -1150,6 +1150,11 @@ function paintOrder0Now() {
 }
 
 export async function startV2() {
+  for (const id of ["frb-toggle", "exo-toggle"]) {
+    const input = document.getElementById(id);
+    const label = input && input.closest("label");
+    if (label) label.hidden = true;
+  }
   window.__BIN_LOD = {
     snapshot() {
       return {

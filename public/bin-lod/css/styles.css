@@ -260,3 +260,45 @@ canvas {
   white-space: nowrap;
   will-change: transform;
 }
+
+.overlay-tip {
+  position: absolute;
+  z-index: 3;
+  max-width: min(92vw, 340px);
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgba(12, 18, 32, 0.94);
+  color: var(--text);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: var(--shadow);
+}
+
+.overlay-tip[hidden] {
+  display: none;
+}
+
+.overlay-tip strong {
+  display: block;
+  font-weight: 650;
+}
+
+.overlay-tip .tip-meta {
+  color: var(--muted);
+}
+
+.overlay-tip .tip-repeater {
+  color: #ffb3ea;
+  font-weight: 600;
+}
+
+.overlay-tip ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.05rem;
+}
+
+.overlay-tip li {
+  margin: 0.1rem 0;
+}
