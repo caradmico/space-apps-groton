@@ -431,10 +431,10 @@ function setFrame(targetX, targetY, targetZ, extent) {
 }
 
 const vertexShader = /* glsl */ `
-  // Distance falloff constants: full brightness within FALLOFF_REF, ~20% at 100 units, down to FALLOFF_FLOOR
+  // Distance falloff: full brightness within FALLOFF_REF units; centre field (~500 units) clamps to FALLOFF_FLOOR (~1.5%).
   const float FALLOFF_REF = 15.0;
-  const float FALLOFF_K = 0.85;
-  const float FALLOFF_FLOOR = 0.02;
+  const float FALLOFF_K = 1.5;
+  const float FALLOFF_FLOOR = 0.015;
   attribute float aSize;
   varying vec3 vColor;
   varying float vFalloff;
