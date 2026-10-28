@@ -431,11 +431,18 @@ function setFrame(targetX, targetY, targetZ, extent) {
 }
 
 const vertexShader = /* glsl */ `
+  // Distance falloff constants: full brightness within FALLOFF_REF, ~20% at 100 units, down to FALLOFF_FLOOR
+  const float FALLOFF_REF = 15.0;
+  const float FALLOFF_K = 0.85;
+  const float FALLOFF_FLOOR = 0.02;
   attribute float aSize;
   varying vec3 vColor;
+  varying float vFalloff;
   void main() {
     vColor = color;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    float dist = length(mvPosition.xyz);
+    vFalloff = clamp(pow(FALLOFF_REF / max(dist, FALLOFF_REF), FALLOFF_K), FALLOFF_FLOOR, 1.0);
     gl_PointSize = aSize * (64.0 / max(-mvPosition.z, 0.35));
     gl_PointSize = clamp(gl_PointSize, 0.75, 16.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -444,12 +451,13 @@ const vertexShader = /* glsl */ `
 
 const fragmentShader = /* glsl */ `
   varying vec3 vColor;
+  varying float vFalloff;
   void main() {
     vec2 uv = gl_PointCoord - vec2(0.5);
     float d = length(uv);
     if (d > 0.5) discard;
     float alpha = smoothstep(0.5, 0.08, d);
-    gl_FragColor = vec4(vColor, alpha);
+    gl_FragColor = vec4(vColor, alpha * vFalloff);
   }
 `;
 
