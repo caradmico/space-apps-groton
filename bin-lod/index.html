@@ -26,10 +26,23 @@
         <p>Far generalized · near accurate · stars appear as each tile arrives · 62-byte v1 tiles, 10-byte Q10 v2 packs</p>
       </div>
       <div class="controls">
+        <label class="ctrl-chip search-chip" for="star-search">
+          <span>Find:</span>
+          <input
+            type="search"
+            id="star-search"
+            list="star-search-list"
+            placeholder="Star name or Gaia ID…"
+            autocomplete="off"
+            aria-label="Search star by HYG name or Gaia DR3 source_id"
+          />
+          <datalist id="star-search-list"></datalist>
+        </label>
         <label class="ctrl-chip" for="viewpoint-select">
           <span>View:</span>
           <select id="viewpoint-select" aria-label="Viewpoint picker">
             <option value="free">Free view</option>
+            <option value="solar">Solar system</option>
             <option value="mercury">Mercury</option>
             <option value="venus">Venus</option>
             <option value="earth">Earth</option>
