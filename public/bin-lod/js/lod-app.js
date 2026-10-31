@@ -26,6 +26,8 @@
  *          the screen centre if the target region is empty
  *   HYG  — data/hyg-near.bin, the 7,999 nearest named/real-distance stars, fading in near the
  *          Sun, and Gaia records inside its max distance are skipped
+ *   Overlays — optional FRB and exoplanet markers. Both off until toggled. The
+ *          module and JSON load only after the star tiles finish.
  *
  * Tiles still stream two at a time in look order and append without reload.
  */
@@ -271,8 +273,18 @@ let sceneStarted = false;
 let nearRefresh = () => {};
 let attachHyg = () => {};
 let hygReady = Promise.resolve(false);
+let viewScene = null;
 let viewCamera = null;
+let viewRenderer = null;
 let viewControls = null;
+let resolveStarsReady = () => {};
+const starsReady = new Promise((resolve) => {
+  resolveStarsReady = resolve;
+});
+let overlayApi = null;
+let overlayApiPromise = null;
+const overlayWant = { frb: false, exo: false };
+let overlayChain = Promise.resolve();
 const trace = {
   firstFrameMs: 0,
   pointsDrawn: 0,
@@ -469,11 +481,18 @@ function setFrame(targetX, targetY, targetZ, extent) {
 }
 
 const vertexShader = /* glsl */ `
+  // Distance falloff: full brightness within FALLOFF_REF units; centre field (~500 units) clamps to FALLOFF_FLOOR (~1.5%).
+  const float FALLOFF_REF = 15.0;
+  const float FALLOFF_K = 1.5;
+  const float FALLOFF_FLOOR = 0.015;
   attribute float aSize;
   varying vec3 vColor;
+  varying float vFalloff;
   void main() {
     vColor = color;
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    float dist = length(mvPosition.xyz);
+    vFalloff = clamp(pow(FALLOFF_REF / max(dist, FALLOFF_REF), FALLOFF_K), FALLOFF_FLOOR, 1.0);
     gl_PointSize = aSize * (64.0 / max(-mvPosition.z, 0.35));
     gl_PointSize = clamp(gl_PointSize, 0.75, 16.0);
     gl_Position = projectionMatrix * mvPosition;
@@ -482,12 +501,13 @@ const vertexShader = /* glsl */ `
 
 const fragmentShader = /* glsl */ `
   varying vec3 vColor;
+  varying float vFalloff;
   void main() {
     vec2 uv = gl_PointCoord - vec2(0.5);
     float d = length(uv);
     if (d > 0.5) discard;
     float alpha = smoothstep(0.5, 0.08, d);
-    gl_FragColor = vec4(vColor, alpha);
+    gl_FragColor = vec4(vColor, alpha * vFalloff);
   }
 `;
 
@@ -1341,6 +1361,7 @@ function updateHud() {
       ? [catalog.fallbackNote]
       : [];
   const errNote = errLines.length ? `<br>${errLines.map(escapeHtml).join("<br>")}` : "";
+  const overlayNote = overlayApi ? overlayApi.hudNote() : "";
   const vpLine = nav.viewpointLabel ? `<strong>${escapeHtml(nav.viewpointLabel)}</strong><br>` : "";
   const searchLine = nav.searchNotice ? `<strong>${escapeHtml(nav.searchNotice)}</strong><br>` : "";
   setStatus(
@@ -1356,6 +1377,7 @@ function updateHud() {
           ? `NEAR accurate subset ${lod.nearCount.toLocaleString()} (cap ${NEAR_BUDGET.toLocaleString()}) within ${catalog.nearRadius.toFixed(1)} of target`
           : `Zoom in toward a region to load an accurate nearby subset`) +
       errNote +
+      overlayNote +
       `<br>No full star-object array. Drag to orbit · pinch or scroll to zoom · two-finger twist to rotate · right-drag to pan`
   );
 }
@@ -1878,8 +1900,11 @@ function initScene() {
   controls.enableZoom = false;
   controls.zoomSpeed = 1.2;
 
+  viewScene = scene;
   viewCamera = camera;
+  viewRenderer = renderer;
   viewControls = controls;
+  overlayApi?.attach(scene, camera, renderer);
   if (new URLSearchParams(location.search).has("debug")) {
     window.__nav = {
       camera,
@@ -2212,35 +2237,44 @@ async function fallbackToCatalog(cause) {
   }
 }
 
+function markStarsReady() {
+  resolveStarsReady();
+  resolveStarsReady = () => {};
+}
+
 async function main() {
-  let tileErr = null;
   try {
-    setStatus("Fetching <code>data/tiles.json</code>…");
-    const index = await loadTilesIndex();
-    const tiles = Array.isArray(index.tiles) ? index.tiles.slice() : [];
-    if (!tiles.length) throw new Error("tiles.json has no tiles");
-    await streamTiles(index, tiles);
-  } catch (err) {
-    tileErr = err;
-  }
-
-  if (sceneStarted && catalog.count > 0) {
-    if (tileErr) {
-      console.warn(tileErr);
-      catalog.streamDone = true;
-      if (lod.tileFarCount > 0) {
-        lod.previewFarCount = 0;
-        lod.farCount = lod.tileFarCount;
-        publishFar();
-      }
-      updateHud();
+    let tileErr = null;
+    try {
+      setStatus("Fetching <code>data/tiles.json</code>…");
+      const index = await loadTilesIndex();
+      const tiles = Array.isArray(index.tiles) ? index.tiles.slice() : [];
+      if (!tiles.length) throw new Error("tiles.json has no tiles");
+      await streamTiles(index, tiles);
+    } catch (err) {
+      tileErr = err;
     }
-    return;
-  }
 
-  const cause =
-    tileErr || new Error(catalog.tileErrors[0] || "No tile records loaded");
-  await fallbackToCatalog(cause);
+    if (sceneStarted && catalog.count > 0) {
+      if (tileErr) {
+        console.warn(tileErr);
+        catalog.streamDone = true;
+        if (lod.tileFarCount > 0) {
+          lod.previewFarCount = 0;
+          lod.farCount = lod.tileFarCount;
+          publishFar();
+        }
+        updateHud();
+      }
+      return;
+    }
+
+    const cause =
+      tileErr || new Error(catalog.tileErrors[0] || "No tile records loaded");
+    await fallbackToCatalog(cause);
+  } finally {
+    markStarsReady();
+  }
 }
 
 function frameDirection(ux, uy, uz, dist = 28) {
@@ -2584,6 +2618,73 @@ function markFallbackFar(far) {
   lod.previewFarCount = 0;
 }
 
+function overlayInput(id) {
+  return document.getElementById(id === "frb" ? "frb-toggle" : "exo-toggle");
+}
+
+function ensureOverlayApi() {
+  if (!overlayApiPromise) {
+    overlayApiPromise = import("./overlays.js").then((mod) => {
+      overlayApi = mod.installOverlays({
+        skyRadius: SKY_RADIUS,
+        canvasWrap: el.canvasWrap,
+        escapeHtml,
+        updateHud,
+      });
+      if (viewScene) overlayApi.attach(viewScene, viewCamera, viewRenderer);
+      return overlayApi;
+    });
+  }
+  return overlayApiPromise;
+}
+
+function queueOverlay(id, on) {
+  overlayWant[id] = Boolean(on);
+  const input = overlayInput(id);
+  if (input && input.checked !== overlayWant[id]) input.checked = overlayWant[id];
+  const run = overlayChain
+    .then(async () => {
+      await starsReady;
+      if (!overlayWant[id] && !overlayApiPromise) return 0;
+      const api = await ensureOverlayApi();
+      return api.setEnabled(id, overlayWant[id]);
+    })
+    .catch((err) => {
+      console.warn(err);
+      overlayWant[id] = false;
+      const box = overlayInput(id);
+      if (box) box.checked = false;
+      return 0;
+    });
+  overlayChain = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
+}
+
+function bindOverlayToggles() {
+  for (const id of ["frb", "exo"]) {
+    const input = overlayInput(id);
+    if (!input) continue;
+    input.addEventListener("change", () => {
+      queueOverlay(id, input.checked);
+    });
+  }
+}
+
+const EMPTY_OVERLAY = {
+  frbDrawn: 0,
+  exoDrawn: 0,
+  frbLoaded: false,
+  exoLoaded: false,
+  frbCount: 0,
+  exoCount: 0,
+  frbRepeaters: 0,
+  exoSky: 0,
+  exoPlanets: 0,
+};
+
 window.__BIN_LOD = {
   snapshot() {
     return {
@@ -2623,7 +2724,14 @@ window.__BIN_LOD = {
       cameraDist: trace.cameraDist ?? null,
       nearSnaps: lod.nearSnaps || 0,
       farCapacity: gpu.farCapacity || 0,
+      ...(overlayApi ? overlayApi.snapshot() : EMPTY_OVERLAY),
     };
+  },
+  setOverlay(id, on) {
+    return queueOverlay(id, on);
+  },
+  projectOverlay(id, index) {
+    return overlayApi ? overlayApi.project(id, index) : null;
   },
   requestBrightSample() {
     trace.sampleBright = true;
@@ -2635,4 +2743,5 @@ window.__BIN_LOD = {
   computePlanetPosition,
 };
 
+bindOverlayToggles();
 main();
