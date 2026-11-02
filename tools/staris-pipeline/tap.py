@@ -9,9 +9,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+import gc
 import numpy as np
 
 try:
@@ -617,40 +618,60 @@ def fetch_coarse(
         done_jobs = manifest.get("done_jobs", {})
         with ThreadPoolExecutor(max_workers=workers) as pool:
             future_to_job = {}
-            for job_idx, batch in jobs:
-                key = f"L{level}_{job_idx}"
-                job_path = os.path.join(jobs_dir, f"L{level}_{job_idx:05d}.dr3x")
-                if os.path.exists(job_path) or key in done_jobs:
-                    progress(f"Skipping done {key}")
-                    continue
-                if guard is not None:
-                    guard()
-                cell_list = []
-                for c in batch:
-                    lk = cell_to_last.get(c)
-                    tc = cell_to_tc.get(c, 0)
-                    cell_list.append((level, c, lk, tc))
-                adql = _build_union_adql(cell_list, region)
-                fut = pool.submit(runner, adql)
-                future_to_job[fut] = (job_idx, batch, job_path, key)
-            for fut in as_completed(future_to_job):
-                job_idx, batch, job_path, key = future_to_job[fut]
-                csvb = fut.result()
-                manifest["bytes"] = manifest.get("bytes", 0) + len(csvb)
-                arr = parse_csv(csvb)
-                accepted = _filter_and_cap(
-                    arr, batch, level, cell_to_last, cell_to_tc, cell_of
-                )
-                if len(accepted) > 0:
-                    tmp = job_path + ".tmp"
-                    accepted.tofile(tmp)
-                    os.replace(tmp, job_path)
-                    check_rss(rss_cap, job_path)
-                count = len(accepted)
-                manifest.setdefault("done_jobs", {})[key] = count
-                manifest.setdefault("counts", {})[key] = count
-                _save_tap_manifest(cache_dir, manifest)
-                progress(f"Level {level} job {job_idx}: {count} rows")
+            job_iter = iter(jobs)
+            max_in_flight = workers * 2
+
+            def _submit_until_full():
+                while len(future_to_job) < max_in_flight:
+                    try:
+                        job_idx, batch = next(job_iter)
+                    except StopIteration:
+                        break
+                    key = f"L{level}_{job_idx}"
+                    job_path = os.path.join(jobs_dir, f"L{level}_{job_idx:05d}.dr3x")
+                    if os.path.exists(job_path) or key in done_jobs:
+                        progress(f"Skipping done {key}")
+                        continue
+                    if guard is not None:
+                        guard()
+                    cell_list = []
+                    for c in batch:
+                        lk = cell_to_last.get(c)
+                        tc = cell_to_tc.get(c, 0)
+                        cell_list.append((level, c, lk, tc))
+                    adql = _build_union_adql(cell_list, region)
+                    fut = pool.submit(runner, adql)
+                    future_to_job[fut] = (job_idx, batch, job_path, key)
+
+            _submit_until_full()
+            while future_to_job:
+                done, _ = wait(future_to_job, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    job_idx, batch, job_path, key = future_to_job.pop(fut)
+                    csvb = fut.result()
+                    del fut
+                    manifest["bytes"] = manifest.get("bytes", 0) + len(csvb)
+                    arr = parse_csv(csvb)
+                    del csvb
+                    accepted = _filter_and_cap(
+                        arr, batch, level, cell_to_last, cell_to_tc, cell_of
+                    )
+                    del arr
+                    count = len(accepted)
+                    if count > 0:
+                        tmp = job_path + ".tmp"
+                        accepted.tofile(tmp)
+                        os.replace(tmp, job_path)
+                        del accepted
+                        gc.collect()
+                        check_rss(rss_cap, job_path)
+                    else:
+                        del accepted
+                    manifest.setdefault("done_jobs", {})[key] = count
+                    manifest.setdefault("counts", {})[key] = count
+                    _save_tap_manifest(cache_dir, manifest)
+                    progress(f"Level {level} job {job_idx}: {count} rows")
+                _submit_until_full()
         _build_picks_for_level(cache_dir, level, cell_of)
         manifest["level"] = level + 1
         _save_tap_manifest(cache_dir, manifest)
