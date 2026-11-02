@@ -10,7 +10,6 @@ from pathlib import Path
 import tap
 import pyramid
 import deep
-import hats
 from r2_upload import make_sink, upload_file, object_exists
 
 
@@ -346,9 +345,9 @@ if __name__ == "__main__":
     except tap.DiskFull as e:
         print(f"DiskFull: {e}")
         sys.exit(2)
-    except hats.HatsReadError as e:
-        print(f"REMOTE READ FAILED: {e}")
-        sys.exit(8)
     except Exception as e:
+        if type(e).__name__ == "HatsReadError":
+            print(f"REMOTE READ FAILED: {e}")
+            sys.exit(8)
         print(f"ERROR: {e}")
         sys.exit(1)
