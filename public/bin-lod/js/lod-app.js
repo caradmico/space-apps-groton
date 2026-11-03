@@ -38,6 +38,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 const RECORD_SIZE = 62;
 const OFF_RA = 8;
 const OFF_DEC = 16;
+let closeup = null;
 const OFF_PLX = 24;
 const OFF_X = 32;
 const OFF_Y = 40;
@@ -1905,6 +1906,14 @@ function initScene() {
   viewRenderer = renderer;
   viewControls = controls;
   overlayApi?.attach(scene, camera, renderer);
+  if (new URLSearchParams(location.search).get("closeup") === "1") {
+    controls.minDistance = Math.min(controls.minDistance, 0.5);
+    import("./closeup.js")
+      .then((m) => {
+        closeup = m.attachCloseup({ THREE, scene, camera, renderer, controls });
+      })
+      .catch((e) => console.warn("closeup failed", e));
+  }
   if (new URLSearchParams(location.search).has("debug")) {
     window.__nav = {
       camera,
@@ -2145,6 +2154,7 @@ function initScene() {
     }
     renderer.render(scene, camera);
     trace.pointsDrawn = renderer.info.render.points;
+    closeup?.render();
     if (!trace.firstFrameMs && trace.pointsDrawn > 0) {
       trace.firstFrameMs = performance.now();
     }
