@@ -51,6 +51,8 @@ const DEG2RAD = Math.PI / 180;
 const SKY_RADIUS = 100;
 const DETECT_SAMPLE = 512;
 
+let closeup = null;
+
 const FAR_BUDGET = 12288;
 const NEAR_BUDGET = 12288;
 const NEAR_ENTER = 36;
@@ -1905,6 +1907,14 @@ function initScene() {
   viewRenderer = renderer;
   viewControls = controls;
   overlayApi?.attach(scene, camera, renderer);
+  if (new URLSearchParams(location.search).get("closeup") === "1") {
+    controls.minDistance = Math.min(controls.minDistance, 0.5);
+    import("./closeup.js")
+      .then((m) => {
+        closeup = m.attachCloseup({ THREE, scene, camera, renderer, controls });
+      })
+      .catch((e) => console.warn("closeup failed", e));
+  }
   if (new URLSearchParams(location.search).has("debug")) {
     window.__nav = {
       camera,
@@ -2145,6 +2155,7 @@ function initScene() {
     }
     renderer.render(scene, camera);
     trace.pointsDrawn = renderer.info.render.points;
+    closeup?.render();
     if (!trace.firstFrameMs && trace.pointsDrawn > 0) {
       trace.firstFrameMs = performance.now();
     }
