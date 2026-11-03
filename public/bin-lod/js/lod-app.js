@@ -38,7 +38,6 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 const RECORD_SIZE = 62;
 const OFF_RA = 8;
 const OFF_DEC = 16;
-let closeup = null;
 const OFF_PLX = 24;
 const OFF_X = 32;
 const OFF_Y = 40;
@@ -51,6 +50,8 @@ const SS_SCALE = 0.05; // Scaled solar-system frame: 1 AU = 0.05 pc (not to scal
 const DEG2RAD = Math.PI / 180;
 const SKY_RADIUS = 100;
 const DETECT_SAMPLE = 512;
+
+let closeup = null;
 
 const FAR_BUDGET = 12288;
 const NEAR_BUDGET = 12288;
