@@ -405,6 +405,12 @@ export function installOverlays(deps) {
         hideTip();
       }
     });
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && pinned) {
+        pinned = null;
+        hideTip();
+      }
+    });
     canvas.addEventListener("pointerleave", () => {
       if (pinned) showTip(pinned, pinX, pinY);
       else hideTip();
@@ -508,5 +514,5 @@ export function installOverlays(deps) {
     };
   }
 
-  return { attach, setEnabled, hudNote, project, snapshot };
+  return { attach, setEnabled, hudNote, project, snapshot, hit: (x, y) => !!pick(x, y) };
 }
