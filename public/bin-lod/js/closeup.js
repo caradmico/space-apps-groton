@@ -14,19 +14,33 @@ function clamp(x, a, b) {
   return Math.max(a, Math.min(b, x));
 }
 
+function pwGauss(x, mu, s1, s2) {
+  const t = (x - mu) / (x < mu ? s1 : s2);
+  return Math.exp(-0.5 * t * t);
+}
+
+// Blackbody color temperature -> LINEAR sRGB normalized to max channel = 1.
+// Integrates Planck B(lambda, T) over 380..780 nm against the analytic CIE 1931
+// 2-deg CMF multi-lobe fit of Wyman, Sloan & Shirley 2013 (JCGT 2(2)).
 export function tempToRGB(k) {
-  const t = clamp(k, 1000, 40000) / 100;
-  let r, g, b;
-  if (t <= 66) {
-    r = 255;
-    g = 99.4708025861 * Math.log(t) - 161.1195681661;
-    b = t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
-  } else {
-    r = 329.698727446 * Math.pow(t - 60, -0.1332047592);
-    g = 288.1221695283 * Math.pow(t - 60, -0.0755148492);
-    b = 255;
+  const T = clamp(k, 1000, 40000);
+  const c2 = 1.438776877e-2;
+  let X = 0, Y = 0, Z = 0;
+  for (let l = 380; l <= 780; l += 1) {
+    const lm = l * 1e-9;
+    const B = 1 / (Math.pow(lm, 5) * (Math.exp(c2 / (lm * T)) - 1));
+    const xbar = 1.056 * pwGauss(l, 599.8, 37.9, 31.0) + 0.362 * pwGauss(l, 442.0, 16.0, 26.7) - 0.065 * pwGauss(l, 501.1, 20.4, 26.2);
+    const ybar = 0.821 * pwGauss(l, 568.8, 46.9, 40.5) + 0.286 * pwGauss(l, 530.9, 16.3, 31.1);
+    const zbar = 1.217 * pwGauss(l, 437.0, 11.8, 36.0) + 0.681 * pwGauss(l, 459.0, 26.0, 13.8);
+    X += B * xbar;
+    Y += B * ybar;
+    Z += B * zbar;
   }
-  return [clamp(r / 255, 0, 1), clamp(g / 255, 0, 1), clamp(b / 255, 0, 1)];
+  const r = Math.max(0,  3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z);
+  const g = Math.max(0, -0.9692660 * X + 1.8760108 * Y + 0.0415560 * Z);
+  const b = Math.max(0,  0.0556434 * X - 0.2040259 * Y + 1.0572252 * Z);
+  const m = Math.max(r, g, b, 1e-20);
+  return [r / m, g / m, b / m];
 }
 
 export function closeupWeight(fraction, f0 = 0.02, f1 = 0.06) {
@@ -41,21 +55,28 @@ function discSolidAngle(d, radius) {
   return 2 * Math.PI * (1 - cosT);
 }
 
-// Forward integral of limb-darkened disc over exact solid angle 2*pi*(1 - cos theta)
-// scaled by limb darkening factor (1 - limb/3).
+// Exact near-field solid-angle integral of linear limb darkening I(mu) = 1 - limb*(1 - mu),
+// where mu = sqrt(1 - sin^2(a)/s^2), s = radius/d, integrated over sky angle a in [0, asin(s)].
+function discFluxFactor(d, radius, limb) {
+  if (d <= radius) return 2 * Math.PI * (1 - limb) + limb * Math.PI;
+  const s = radius / d;
+  const c = Math.sqrt(Math.max(0, 1 - s * s));
+  const omega = 2 * Math.PI * (1 - c);
+  const J = Math.PI * (s - c * c * Math.log((1 + s) / c)) / s;
+  return (1 - limb) * omega + limb * J;
+}
+
 export function discFlux({ S, d, radius, limb = 0.6 }) {
-  const omega = discSolidAngle(d, radius);
-  return S * omega * (1 - limb / 3);
+  return S * discFluxFactor(d, radius, limb);
 }
 
 // Handoff math: computes radiance S so that discFlux equals dbLum / d^2.
 // Corona/haze is controlled by uHazeFrac (default 0) so total handoff flux is exact by default.
 export function normalizeEmission({ dbLum, d, radius, limb = 0.6 }) {
   const targetFlux = dbLum / (d * d);
-  const denom = discSolidAngle(d, radius) * (1 - limb / 3);
+  const denom = discFluxFactor(d, radius, limb);
   return denom > 0 ? targetFlux / denom : 0;
 }
-
 const VERT = /* glsl */ `
 varying vec2 vUv;
 void main() {
