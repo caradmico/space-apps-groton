@@ -34,6 +34,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { installNamePick } from "./name-pick.js";
 
 const RECORD_SIZE = 62;
 const OFF_RA = 8;
@@ -52,6 +53,65 @@ const SKY_RADIUS = 100;
 const DETECT_SAMPLE = 512;
 
 let closeup = null;
+
+let namePick = null;
+const namePickVec = new THREE.Vector3();
+
+function namePickCandidates() {
+  if (!viewCamera || !el.canvasWrap) return [];
+  const w = el.canvasWrap.clientWidth;
+  const h = el.canvasWrap.clientHeight;
+  if (w < 1 || h < 1) return [];
+  const out = [];
+
+  if (hyg.points && hyg.points.visible && hyg.alpha > 0.02 && hyg.named && hyg.pos && hyg.names) {
+    const pos = hyg.pos;
+    const names = hyg.names;
+    for (let i = 0; i < hyg.named.length; i++) {
+      const idx = hyg.named[i];
+      const p3 = idx * 3;
+      namePickVec.set(pos[p3], pos[p3 + 1], pos[p3 + 2]).project(viewCamera);
+      const { x, y, z } = namePickVec;
+      if (z <= -1 || z >= 1 || Math.abs(x) > 1 || Math.abs(y) > 1) continue;
+      out.push({
+        name: names[idx],
+        sx: (x + 1) * 0.5 * w,
+        sy: (1 - y) * 0.5 * h,
+        key: "hyg:" + idx,
+      });
+    }
+  }
+
+  if (nav.viewpoint !== "free" && solarSystem.points && solarSystem.points.visible && solarSystem.bodies) {
+    for (let i = 0; i < solarSystem.bodies.length; i++) {
+      const b = solarSystem.bodies[i];
+      if (b.key === nav.viewpoint) continue;
+      namePickVec.set(b.x, b.y, b.z).project(viewCamera);
+      const { x, y, z } = namePickVec;
+      if (z <= -1 || z >= 1 || Math.abs(x) > 1 || Math.abs(y) > 1) continue;
+      out.push({
+        name: b.name,
+        sx: (x + 1) * 0.5 * w,
+        sy: (1 - y) * 0.5 * h,
+        key: "ss:" + b.key,
+      });
+    }
+  }
+
+  return out;
+}
+
+function ensureNamePick() {
+  if (namePick || !viewRenderer) return;
+  namePick = installNamePick({
+    canvas: viewRenderer.domElement,
+    canvasWrap: el.canvasWrap,
+    getCandidates: namePickCandidates,
+    overlayHit: (cx, cy) => !!(overlayApi && overlayApi.hit && overlayApi.hit(cx, cy)),
+    escapeHtml,
+  });
+  window.__namePick = { ...namePick, candidates: namePickCandidates };
+}
 
 const FAR_BUDGET = 12288;
 const NEAR_BUDGET = 12288;
@@ -2156,6 +2216,8 @@ function initScene() {
     renderer.render(scene, camera);
     trace.pointsDrawn = renderer.info.render.points;
     closeup?.render();
+    ensureNamePick();
+    namePick?.update();
     if (!trace.firstFrameMs && trace.pointsDrawn > 0) {
       trace.firstFrameMs = performance.now();
     }
