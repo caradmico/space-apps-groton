@@ -1,0 +1,14 @@
+Write a Markdown design doc "StarIS one-store design (backend fix)". Doc only. Be concise and precise; mark anything not verified as UNVERIFIED. Owner goal (Cara): keep all space data in one place because that may enable things otherwise impossible; storage method doesn't matter as long as it is efficient to pull.
+FACTS (verified on box):
+- Existing star bins: Gaia DR1 gaia_source, 5,217 .bin on Drive (65.80 GiB, 70,656,528,474 B), 14 missing slots (.fits); 1,139,621,427 stars (99.73% of DR1's 1,142,679,769). 62 B LE records: int64 source_id, f64 RA, f64 Dec, f64 parallax mas (NaN if none), 3xf64 xyz in parsecs (0 if no parallax; |xyz|=1000/plx exactly), u16 colour class 1/2/3 (rule unknown), f32 G mag. Usable parallax (>0) ~0.02-0.5% per shard, ~0.2% overall (TGAS ~2M). No redshift in star bins.
+- Galaxies: AllGalaxies_caradmico.csv (SDSS DR17, 3,008,695 rows, 177.8 MB; specObjID,ra,dec,z,g; z>0.01). Existing galaxy codec v2 spec converts z to comoving Mpc, 12-bit ln r per cell.
+- Gaia DR3 full gaia_source: 3,386 GaiaSource_*.csv.gz files, 753,025,661,884 B (ESA cdn listing, verified), 1.81B sources, ~1.47B with parallax. Free-tier Q8 depth ~14.5 GB exceeds R2 10 GB free tier; orders 0-6 cap 67.1M stars / 537 MB fits Pages.
+- Bailer-Jones EDR3 distances (external.gaiaedr3_distance, ~1.47B rows): size UNVERIFIED.
+- Bright good-parallax TAP subset (e.g. parallax_over_error>10, G<~18): row count/size UNVERIFIED; give the ADQL.
+REQUIRED SECTIONS:
+1. One store, one shared 3D frame: ICRS, heliocentric parsecs, for Gaia stars, SDSS galaxies (z -> comoving distance, state cosmology e.g. Planck18, note 1 Mpc=1e6 pc and float precision), exoplanets (NASA Exoplanet Archive host coords+distance), small bodies (JPL/MPC orbits -> heliocentric ICRS at epoch, ecliptic->ICRS rotation; AU->pc). Common record schema with object-type field and distance-quality flag.
+2. One tile format: HEALPix (or octree) nodes, per-node L_max (brightest luminosity/flux) and total L for LOD, records sorted brightest-first within each tile so a byte-range prefix fetch (HTTP Range) gives the top-N; header/index layout; fixed-width records.
+3. Gaia DR3 ingest paths (a) TAP bright subset (b) full 753 GB streaming per-file with manifest resume (c) Bailer-Jones distances join by source_id; sizes, effort.
+4. Hosting/cost per path: Spark (Firebase free plan) hosting limits, GitHub Pages (1 GB site soft limit, 100 MB file limit), other free, vs Cloudflare R2 ($0.015/GB-month beyond 10 GB free, zero egress) — mark prices to be re-checked. Put all paid items in a "Cara review list" section.
+5. DR1 bins: keep untouched (never delete); DR1 xyz for ~2M TGAS stars superseded by DR3; DR1 kept as 2D sky layer / fallback / source_id crosswalk caveat (DR1 and DR3 ids not guaranteed equal; use gaiadr3.dr2_neighbourhood / dr1 neighbourhood tables, UNVERIFIED names).
+6. Open decisions for Cara (numbered).
