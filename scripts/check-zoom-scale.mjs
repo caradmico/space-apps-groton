@@ -142,10 +142,15 @@ for (const level of ZOOM_LEVELS) {
 }
 
 // 4. Specific numeric bounds
+const STEP_TOL = 1e-6;
 const fine10AuInAu = zoomStepPc(10 / AU_PER_PC, "fine", 1) * AU_PER_PC;
 check(
   fine10AuInAu >= 0.05 && fine10AuInAu <= 1.0,
   `Fine at 10 AU is between 0.05 AU and 1 AU (got ${fine10AuInAu.toFixed(4)} AU)`
+);
+check(
+  Math.abs(fine10AuInAu - 0.5) < STEP_TOL,
+  `Fine at 10 AU is 0.5 AU/step within ${STEP_TOL} (got ${fine10AuInAu} AU)`
 );
 
 const fine1AuInAu = zoomStepPc(1 / AU_PER_PC, "fine", 1) * AU_PER_PC;
@@ -159,6 +164,10 @@ check(
   med10Pc >= 1.5 && med10Pc <= 2.5,
   `Medium at 10 pc is between 1.5 and 2.5 pc (got ${med10Pc.toFixed(3)} pc)`
 );
+check(
+  Math.abs(med10Pc - 2.0) < STEP_TOL,
+  `Medium at 10 pc is 2.0 pc/step within ${STEP_TOL} (got ${med10Pc} pc)`
+);
 
 // 5. Coarse reach tests
 {
@@ -171,6 +180,10 @@ check(
   check(
     d >= MAX_DIST_PC && stepsFrom1Pc <= 12,
     `Coarse from 1 pc reaches 1e5 pc in <= 12 steps (took ${stepsFrom1Pc} steps)`
+  );
+  check(
+    stepsFrom1Pc === 9,
+    `Coarse from 1 pc reaches 1e5 pc in exactly 9 unit steps (took ${stepsFrom1Pc} steps)`
   );
 }
 
