@@ -242,6 +242,11 @@ canvas {
 }
 
 @media (max-width: 640px) {
+  #zoom-select {
+    min-height: 2rem;
+    min-width: 6.5rem;
+  }
+
   .topbar {
     align-items: stretch;
   }

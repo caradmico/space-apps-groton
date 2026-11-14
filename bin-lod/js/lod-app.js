@@ -32,6 +32,19 @@
  * Tiles still stream two at a time in look order and append without reload.
  */
 
+import {
+  parseZoomLevel,
+  resolveZoomLevel,
+  persistZoomLevel,
+  cycleZoomLevel,
+  zoomStepPc,
+  zoomReferenceDistance,
+  formatZoomStep,
+  formatZoomLabel,
+  installZoomControl,
+} from "./zoom-scale.js";
+
+
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
@@ -158,9 +171,12 @@ function getScaledPlanetPos(name, date = new Date()) {
   return [p.xScaled, p.yScaled, p.zScaled];
 }
 
-export function zoomStepFor(distance) {
-  const d = Number.isFinite(distance) && distance > 0 ? distance : 1;
-  return Math.max(1e-4, Math.min(d * 0.18, 400));
+export function zoomStepFor(distance, level) {
+  const resolved =
+    parseZoomLevel(level) ||
+    (typeof nav !== "undefined" && nav.zoomLevel) ||
+    "medium";
+  return zoomStepPc(distance, resolved, 1);
 }
 
 const PLANET_KEYS = ["mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune"];
@@ -218,7 +234,37 @@ const nav = {
   lastZoomStep: 0,
   nearestStarDist: Infinity,
   nearestStarFrame: -999,
+  zoomLevel: resolveZoomLevel({
+    search: typeof location !== "undefined" ? location.search : "",
+    storage: typeof localStorage !== "undefined" ? localStorage : null,
+  }),
 };
+
+function freeZoomFloorPc(level = nav.zoomLevel) {
+  if (level === "fine") return 0.05 / 206264.806;
+  if (level === "medium") return 5 / 206264.806;
+  return 0.02;
+}
+
+function persistCurrentZoom(level) {
+  let url;
+  try {
+    url = new URL(location.href);
+  } catch (_) {
+    url = undefined;
+  }
+  const storage = typeof localStorage !== "undefined" ? localStorage : null;
+  persistZoomLevel(level, storage, url);
+}
+
+function setZoomLevel(level) {
+  const parsed = parseZoomLevel(level) || nav.zoomLevel;
+  nav.zoomLevel = parsed;
+  persistCurrentZoom(parsed);
+  const sel = document.getElementById("zoom-select");
+  if (sel && sel.value !== parsed) sel.value = parsed;
+  if (typeof updateHud === "function") updateHud();
+}
 
 const catalog = {
   buffer: null,
@@ -1381,7 +1427,8 @@ function updateHud() {
           : `Zoom in toward a region to load an accurate nearby subset`) +
       errNote +
       overlayNote +
-      `<br>No full star-object array. Drag to orbit · pinch or scroll to zoom · two-finger twist to rotate · right-drag to pan`
+      `<br>No full star-object array. Drag to orbit · pinch or scroll to zoom · two-finger twist to rotate · right-drag to pan` +
+      `<br>Zoom ${formatZoomLabel(nav.zoomLevel)} · ${formatZoomStep(nav.lastZoomStep > 0 ? nav.lastZoomStep : zoomStepPc(1, nav.zoomLevel, 1))}`
   );
 }
 
@@ -1506,7 +1553,7 @@ function updateSolarSystemLabels(camera, width, height) {
 
 function computeNearPlane(frame) {
   return nav.freeRoam || nav.viewpoint !== "free"
-    ? 0.0001
+    ? 1e-7
     : Math.max(frame.dist * 0.01, 0.05);
 }
 
@@ -1534,7 +1581,7 @@ function applyNavigationMode() {
     viewControls.enableZoom = false;
     viewControls.enablePan = true;
     viewControls.rotateSpeed = 1.0;
-    viewCamera.near = 0.0001;
+    viewCamera.near = 1e-7;
     viewCamera.updateProjectionMatrix();
     viewControls.update();
 
@@ -1648,6 +1695,20 @@ if (el.viewSelect) {
 if (el.freeRoamToggle) {
   el.freeRoamToggle.addEventListener("change", (e) => {
     setFreeRoam(e.target.checked);
+  });
+}
+
+installZoomControl({ level: nav.zoomLevel, onChange: setZoomLevel });
+if (typeof window !== "undefined" && !window.__zoomKeysBound) {
+  window.__zoomKeysBound = true;
+  window.addEventListener("keydown", (event) => {
+    const tgt = event.target;
+    if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.tagName === "SELECT" || tgt.isContentEditable)) return;
+    if (event.key === "]") {
+      setZoomLevel(cycleZoomLevel(nav.zoomLevel, 1));
+    } else if (event.key === "[") {
+      setZoomLevel(cycleZoomLevel(nav.zoomLevel, -1));
+    }
   });
 }
 
@@ -2010,7 +2071,7 @@ function initScene() {
   // step = zoomStepFor(dRef) * notches (with dRef = min(dist to target, dist to nearest star)).
   // When Free roam is enabled and the camera approaches controls.target, target is pushed
   // forward along the view ray so the camera flies smoothly through the origin and beyond.
-  const DOLLY_FLOOR = 0.25;
+  const DOLLY_FLOOR = freeZoomFloorPc();
   const viewDir = new THREE.Vector3();
 
   function applyZoomDolly(notches) {
@@ -2018,7 +2079,8 @@ function initScene() {
     if (!Number.isFinite(notches) || Math.abs(notches) < 1e-6) return;
 
     const dRef = computeNearestLocalDistance(camera, controls, trace.frame || 0);
-    const baseStep = zoomStepFor(dRef);
+    const baseStep = zoomStepFor(dRef, nav.zoomLevel);
+    const DOLLY_FLOOR = freeZoomFloorPc(nav.zoomLevel);
     const signedMove = baseStep * notches;
     const stepMag = Math.abs(signedMove);
     nav.lastZoomStep = stepMag;
