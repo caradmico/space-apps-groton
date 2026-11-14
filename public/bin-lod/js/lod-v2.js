@@ -7,6 +7,17 @@ import { decodeQ8, decodeQ10, Q8_BYTES, Q10_BYTES } from "../scripts/q8.js";
 import { G1B_MAGIC, parseG1bHeader, inflateCell, checkG1bBounds } from "../scripts/g1b.js";
 import { InflatedCache } from "./inflated-cache.js";
 import { ang2pixNest, children, pix2vecNest } from "./healpix.js";
+import {
+  parseZoomLevel,
+  resolveZoomLevel,
+  persistZoomLevel,
+  cycleZoomLevel,
+  zoomStepPc,
+  zoomReferenceDistance,
+  formatZoomStep,
+  formatZoomLabel,
+  installZoomControl,
+} from "./zoom-scale.js";
 
 let THREE = null;
 let OrbitControls = null;
@@ -64,6 +75,45 @@ const state = {
   r2Base: null,
   maxOrder: 6,
 };
+
+let zoomLevel = resolveZoomLevel({
+  search: typeof location !== "undefined" ? location.search : "",
+  storage: typeof localStorage !== "undefined" ? localStorage : null,
+});
+
+function persistCurrentZoom(level) {
+  let url;
+  try {
+    url = new URL(location.href);
+  } catch (_) {
+    url = undefined;
+  }
+  persistZoomLevel(level, typeof localStorage !== "undefined" ? localStorage : null, url);
+}
+
+function setZoomLevel(level) {
+  const parsed = parseZoomLevel(level) || zoomLevel;
+  zoomLevel = parsed;
+  persistCurrentZoom(parsed);
+  const sel = document.getElementById("zoom-select");
+  if (sel && sel.value !== parsed) sel.value = parsed;
+}
+
+function currentZoomDRef() {
+  if (!camera || !controls) return 1;
+  return zoomReferenceDistance({
+    cameraPos: camera.position,
+    targetPos: controls.target,
+    lookGap: 0.5,
+    interestPoints: [{ x: 0, y: 0, z: 0 }],
+  });
+}
+
+function freeZoomFloorPc(level = zoomLevel) {
+  if (level === "fine") return 0.05 / 206264.806;
+  if (level === "medium") return 5 / 206264.806;
+  return 0.02;
+}
 
 let active = 0;
 const waiters = [];
@@ -1018,7 +1068,7 @@ function hud() {
   el.count.textContent = `${state.farCount.toLocaleString()} far · ${state.nearCount.toLocaleString()} near`;
   setStatus(
     `<strong>v2</strong> · order 0 resident ${state.farCount.toLocaleString()} · near ${state.nearCount.toLocaleString()} · fetches in flight ${state.inFlight}<br>` +
-      `HYG ${state.hygAlpha > 0.05 ? "on" : "off"} · labels ${state.labels.length}`
+      `HYG ${state.hygAlpha > 0.05 ? "on" : "off"} · labels ${state.labels.length} · Zoom ${formatZoomLabel(zoomLevel)} · ${formatZoomStep(zoomStepPc(currentZoomDRef(), zoomLevel, 1))}`
   );
 }
 
@@ -1233,9 +1283,10 @@ export async function startV2() {
   scratch = new THREE.Vector3();
 
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(55, 1, 0.05, MAX_DIST_PC * 2.2);
+  camera = new THREE.PerspectiveCamera(55, 1, 1e-7, MAX_DIST_PC * 2.2);
   // ~1 pc from Sun (OrbitControls needs nonzero offset); stars at real parallax dist up to 1e5 pc
   camera.position.set(0, 0.3, 1);
+  camera.lookAt(0, 0, 0);
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, logarithmicDepthBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(el.canvasWrap.clientWidth, Math.max(el.canvasWrap.clientHeight, 1), false);
@@ -1249,8 +1300,86 @@ export async function startV2() {
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.target.set(0, 0, 0);
-  controls.minDistance = 0.2;
+  controls.minDistance = 0.02 / 206264.806;
   controls.maxDistance = MAX_DIST_PC;
+  controls.enableZoom = false;
+
+  const viewDir = new THREE.Vector3();
+  function applyZoomDolly(notches) {
+    if (!Number.isFinite(notches) || Math.abs(notches) < 1e-6) return;
+    const sign = notches > 0 ? 1 : -1;
+    const step = zoomStepPc(currentZoomDRef(), zoomLevel, Math.abs(notches));
+    const floor = freeZoomFloorPc(zoomLevel);
+    viewDir.subVectors(controls.target, camera.position);
+    let dist = viewDir.length();
+    if (dist > 1e-12) {
+      viewDir.divideScalar(dist);
+    } else {
+      camera.getWorldDirection(viewDir);
+      if (viewDir.lengthSq() < 1e-8) viewDir.set(0, 0, -1);
+      else viewDir.normalize();
+      dist = 0;
+    }
+    if (sign > 0) {
+      const remain = dist - step;
+      if (remain >= floor) {
+        camera.position.addScaledVector(viewDir, step);
+      } else if (dist > floor) {
+        camera.position.addScaledVector(viewDir, dist - floor);
+      }
+    } else {
+      const nextDist = Math.min(MAX_DIST_PC, dist + step);
+      camera.position.addScaledVector(viewDir, -(nextDist - dist));
+    }
+    camera.near = 1e-7;
+    camera.updateProjectionMatrix();
+    controls.update();
+  }
+
+  renderer.domElement.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const mag = Math.max(0.35, Math.min(4, Math.abs(e.deltaY) / 100));
+      if (e.deltaY < 0) applyZoomDolly(mag);
+      else if (e.deltaY > 0) applyZoomDolly(-mag);
+    },
+    { capture: true, passive: false }
+  );
+
+  let pinchPrevSpan = 0;
+  renderer.domElement.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchPrevSpan = Math.hypot(dx, dy);
+    } else pinchPrevSpan = 0;
+  }, { passive: true });
+  renderer.domElement.addEventListener("touchmove", (e) => {
+    if (e.touches.length !== 2) return;
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const span = Math.hypot(dx, dy);
+    if (pinchPrevSpan > 0 && span > 0) {
+      const ratio = span / pinchPrevSpan;
+      const mag = Math.max(0.35, Math.min(3, Math.abs(ratio - 1) * 4));
+      if (ratio > 1.02) applyZoomDolly(mag);
+      else if (ratio < 0.98) applyZoomDolly(-mag);
+    }
+    pinchPrevSpan = span;
+  }, { passive: true });
+
+  installZoomControl({ level: zoomLevel, onChange: setZoomLevel });
+  if (typeof window !== "undefined" && !window.__v2ZoomKeysBound) {
+    window.__v2ZoomKeysBound = true;
+    window.addEventListener("keydown", (event) => {
+      const tgt = event.target;
+      if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.tagName === "SELECT" || tgt.isContentEditable)) return;
+      if (event.key === "]") setZoomLevel(cycleZoomLevel(zoomLevel, 1));
+      else if (event.key === "[") setZoomLevel(cycleZoomLevel(zoomLevel, -1));
+    });
+  }
+
   farPoints = makePoints(FAR_BUDGET);
   nearPoints = makePoints(NEAR_BUDGET);
   scene.add(farPoints.points);
