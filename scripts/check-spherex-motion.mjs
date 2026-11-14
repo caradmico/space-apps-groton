@@ -16,6 +16,7 @@ import {
   sliderToYears,
   yearsToSlider,
   formatYears,
+  clampInsetLabel,
 } from "../public/bin-lod/js/spherex-motion.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -135,6 +136,29 @@ if (fs.existsSync(layerPath)) {
   const validClasses = new Set(["FULL_3D", "SIDEWAYS_ONLY", "STATIC"]);
   const allValid = (layer.stars || []).every((s) => validClasses.has(s.motion_class));
   check(allValid, "All stars in barnard-field.json have valid motion_class");
+}
+
+
+// 8. clampInsetLabel keeps the Barnard caption inside the inset
+{
+  const fit = clampInsetLabel(30, 40, 80, 10, 240, 240, 6, 16);
+  check(fit.x === 30 && fit.y === 40, "Preferred label position that already fits is unchanged");
+
+  const right = clampInsetLabel(180, 50, 90, 10, 240, 240, 6, 16);
+  check(right.x === 180 - 5 - 90, "Right overflow moves the label left of the preferred point");
+  check(right.x >= 6 && right.x + 90 <= 240 - 6, "Right-overflow label stays inside horizontal pad");
+  check(right.y === 50, "Right overflow does not change y when y already fits");
+
+  const top = clampInsetLabel(20, 8, 80, 10, 240, 240, 6, 16);
+  check(top.y === 16 && top.y - 10 >= 6, "Top overflow is clamped so y-textHeight >= pad");
+
+  const bottom = clampInsetLabel(20, 235, 80, 10, 240, 240, 6, 16);
+  check(bottom.y === 240 - 16 && bottom.y <= 240 - 16, "Bottom label stays above the caption reserve");
+
+  const long = clampInsetLabel(100, 140, 180, 10, 148, 148, 6, 16);
+  check(long.x === 6, "180px label on a 148px inset is clamped to the left pad");
+  check(long.x + 180 <= 148 - 6 || long.x === 6, "Long label starts at pad when wider than the inset");
+  check(long.y - 10 >= 6 && long.y <= 148 - 16, "Long label stays inside the vertical box");
 }
 
 console.log(`Passed: ${passed}, Failed: ${failed}`);
