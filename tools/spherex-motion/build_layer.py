@@ -24,6 +24,7 @@ from astropy.wcs.utils import proj_plane_pixel_scales
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import motion  # noqa: E402
+from band_to_color import CAPTIONS, INSUFFICIENT_TAG, colorize  # noqa: E402
 
 NOMINAL_DETECTOR_WAVE_UM = {
     1: 0.93,
@@ -33,6 +34,18 @@ NOMINAL_DETECTOR_WAVE_UM = {
     5: 4.12,
     6: 4.71,
 }
+
+
+IR_COLOR_CAPTION = (
+    "False color: SPHEREx sees infrared light, invisible to the eye. "
+    "Blue = shorter infrared, red = longer."
+)
+IR_COLOR_SOURCE = (
+    "tools/spherex-motion/band_to_color.py "
+    "(official 1.63 / 3.83 um group edges, WCS-WAVE wavelengths)"
+)
+INSUFFICIENT_CAPTION = CAPTIONS[INSUFFICIENT_TAG]
+
 
 DEFAULT_BUILD_CFG = {
     **motion.DEFAULT_CFG,
@@ -417,6 +430,76 @@ def match_detections_to_gaia(
     return matched_by_id, ambiguous_ids, unmatched
 
 
+
+def compute_star_ir_color(samples: list[tuple[float, float, float]]) -> dict:
+    """Run colorize() on real (wave_um, flux, flux_error) samples.
+
+    Insufficient-data stars keep ir_rgb=None so the viewer can leave them
+    in their normal color. The script's #808080 gray is not written to ir_rgb.
+    Midpoint / detector-fallback wavelengths should not be passed in.
+    """
+    usable = []
+    for item in samples:
+        if not item or len(item) < 3:
+            continue
+        w, f, fe = item[0], item[1], item[2]
+        if w is None or f is None or fe is None:
+            continue
+        try:
+            w = float(w)
+            f = float(f)
+            fe = float(fe)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(w) and math.isfinite(f) and math.isfinite(fe) and f > 0.0 and fe > 0.0:
+            usable.append((w, f, fe))
+    if not usable:
+        return {
+            "ir_tag": INSUFFICIENT_TAG,
+            "ir_hex": "#808080",
+            "ir_caption": INSUFFICIENT_CAPTION,
+            "ir_rgb": None,
+        }
+
+    try:
+        res = colorize(
+            {
+                "wavelength_um": [u[0] for u in usable],
+                "flux": [u[1] for u in usable],
+                "flux_error": [u[2] for u in usable],
+            }
+        )
+    except (OverflowError, ValueError):
+        return {
+            "ir_tag": INSUFFICIENT_TAG,
+            "ir_hex": "#808080",
+            "ir_caption": INSUFFICIENT_CAPTION,
+            "ir_rgb": None,
+        }
+    tag = res.get("tag") or INSUFFICIENT_TAG
+    hex_code = res.get("hex") or "#808080"
+    caption = res.get("caption") or INSUFFICIENT_CAPTION
+    if tag == INSUFFICIENT_TAG:
+        return {
+            "ir_tag": tag,
+            "ir_hex": hex_code,
+            "ir_caption": caption,
+            "ir_rgb": None,
+        }
+    rgb_dict = res.get("rgb") or {}
+    ir_rgb = [
+        round(float(rgb_dict["r"]) / 255.0, 4),
+        round(float(rgb_dict["g"]) / 255.0, 4),
+        round(float(rgb_dict["b"]) / 255.0, 4),
+    ]
+    return {
+        "ir_tag": tag,
+        "ir_hex": hex_code,
+        "ir_caption": caption,
+        "ir_rgb": ir_rgb,
+    }
+
+
 def compute_false_color(samples: list[tuple[float, float]], band_edges_um: list[float]) -> tuple[list[float] | None, bool]:
     """Compute [R, G, B] false color from (wavelength_um, flux) samples."""
     if not samples:
@@ -722,16 +805,23 @@ def build_layer(
                         star_flags[gid].add("ambiguous")
                     for gid, dlist in matched.items():
                         for d in dlist:
-                            star_records[gid]["detections"].append(
-                                {
-                                    "mjd": round(mjd_exp, 6),
-                                    "ra": round(float(d["ra"]), 7),
-                                    "dec": round(float(d["dec"]), 7),
-                                    "snr": round(float(d["snr"]), 3),
-                                    "wave_um": round(float(d["wave_um"]), 4),
-                                }
-                            )
-                            star_samples[gid].append((float(d["wave_um"]), float(d["flux"])))
+                            flux = float(d["flux"])
+                            snr = float(d["snr"])
+                            flux_err = (flux / snr) if (flux > 0.0 and snr > 0.0) else None
+                            rec = {
+                                "mjd": round(mjd_exp, 6),
+                                "ra": round(float(d["ra"]), 7),
+                                "dec": round(float(d["dec"]), 7),
+                                "snr": round(snr, 3),
+                                "wave_um": round(float(d["wave_um"]), 4),
+                            }
+                            if flux_err is not None:
+                                rec["flux"] = round(flux, 3)
+                                rec["flux_err"] = round(flux_err, 3)
+                            star_records[gid]["detections"].append(rec)
+                            # Use real WCS-WAVE wavelengths only, never detector-band midpoints.
+                            if (not d.get("wave_from_detector")) and flux_err is not None:
+                                star_samples[gid].append((float(d["wave_um"]), flux, flux_err))
                             if d.get("wave_from_detector"):
                                 star_flags[gid].add("wave_from_detector")
 
@@ -776,9 +866,7 @@ def build_layer(
         if not inside and not star_records[gid]["detections"]:
             continue
 
-        ir_rgb, ir_partial = compute_false_color(star_samples[gid], cfg["band_edges_um"])
-        if ir_partial:
-            star_flags[gid].add("ir_partial")
+        ir_info = compute_star_ir_color(star_samples[gid])
 
         m_class = motion.classify_motion(st, cfg)
         t_trust = motion.trust_limit_years(st, cfg)
@@ -800,7 +888,10 @@ def build_layer(
                 "gmag": round(float(st["gmag"]), 4) if st["gmag"] is not None else None,
                 "motion_class": m_class,
                 "t_trust_yr": round(float(t_trust), 2),
-                "ir_rgb": ir_rgb,
+                "ir_rgb": ir_info["ir_rgb"],
+                "ir_tag": ir_info["ir_tag"],
+                "ir_hex": ir_info["ir_hex"],
+                "ir_caption": ir_info["ir_caption"],
                 "detections": star_records[gid]["detections"],
                 "flags": sorted(star_flags[gid]),
             }
@@ -852,6 +943,8 @@ def build_layer(
                 "config": cfg,
                 "generated_by": "tools/spherex-motion/build_layer.py",
                 "sources": "IRSA SPHEREx (AWS mirror) + Gaia DR3 + JPL SBDB",
+                "ir_color_caption": IR_COLOR_CAPTION,
+                "ir_color_source": IR_COLOR_SOURCE,
             },
             "stars": out_stars,
             "unmatched": unmatched_all,

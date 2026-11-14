@@ -314,7 +314,10 @@ def test_end_to_end_and_pending_build_layer(tmp_path: Path):
     assert data["meta"]["pixels"] == "real"
     assert len(data["stars"]) == 1
     assert len(data["stars"][0]["detections"]) == 2
-    assert "ir_partial" in data["stars"][0]["flags"]
+    # Both synthetic exposures cover only the short group (1.0–1.6 µm).
+    assert data["stars"][0]["ir_tag"] == "insufficient data"
+    assert data["stars"][0]["ir_rgb"] is None
+    assert data["meta"]["ir_color_caption"] == build_layer.IR_COLOR_CAPTION
 
     empty_dir = tmp_path / "empty_offline"
     empty_dir.mkdir()
@@ -331,6 +334,82 @@ def test_end_to_end_and_pending_build_layer(tmp_path: Path):
     assert pdata["meta"]["pixels"] == "pending"
     assert len(pdata["stars"]) == 1
     assert pdata["stars"][0]["detections"] == []
+
+
+def test_official_group_edges_and_real_wavelengths():
+    # 1.62 -> short (<1.63), 1.63 & 3.82 -> mid ([1.63, 3.83)), 3.83 -> long (>=3.83)
+    waves = [1.62, 1.63, 3.82, 3.83]
+    fluxes = [100.0, 80.0, 60.0, 50.0]
+    errs = [5.0, 4.0, 3.0, 2.5]
+    from band_to_color import INSUFFICIENT_TAG, colorize
+    res = colorize({"wavelength_um": waves, "flux": fluxes, "flux_error": errs})
+    assert res["tag"] != INSUFFICIENT_TAG
+    groups = res["groups"]
+    assert groups["short"]["n_channels"] == 1
+    assert abs(groups["short"]["mean_wavelength_um"] - 1.62) < 1e-6
+    assert groups["mid"]["n_channels"] == 2
+    assert abs(groups["mid"]["mean_wavelength_um"] - ((1.63 + 3.82) / 2.0)) < 1e-6
+    assert groups["long"]["n_channels"] == 1
+    assert abs(groups["long"]["mean_wavelength_um"] - 3.83) < 1e-6
+
+
+def test_compute_star_ir_color_hot_vs_insufficient():
+    from band_to_color import INSUFFICIENT_TAG
+
+    hot_samples = [
+        (1.10, 300.0, 10.0),
+        (1.50, 260.0, 10.0),
+        (2.20, 100.0, 5.0),
+        (4.10, 40.0, 2.0),
+    ]
+    hot = build_layer.compute_star_ir_color(hot_samples)
+    assert hot["ir_tag"] == "blue/hot"
+    assert hot["ir_rgb"] is not None
+    assert len(hot["ir_rgb"]) == 3
+    assert hot["ir_rgb"][2] > hot["ir_rgb"][0]  # B > R
+    assert hot["ir_hex"].startswith("#") and hot["ir_hex"].lower() != "#808080"
+
+    no_long = [
+        (1.20, 100.0, 5.0),
+        (2.40, 100.0, 5.0),
+    ]
+    insuf = build_layer.compute_star_ir_color(no_long)
+    assert insuf["ir_tag"] == INSUFFICIENT_TAG
+    assert insuf["ir_hex"].lower() == "#808080"
+    assert insuf["ir_rgb"] is None
+
+    empty = build_layer.compute_star_ir_color([])
+    assert empty["ir_tag"] == INSUFFICIENT_TAG
+    assert empty["ir_rgb"] is None
+
+
+def test_steep_short_slope_does_not_abort_colorize():
+    """A steep short-group power law overflowed math.exp in ir_excess_ratio
+    on real FITS; the guard must keep colorize() from aborting the build.
+    With all three groups present, a color tag (not a crash) is returned.
+    """
+    from band_to_color import INSUFFICIENT_TAG, colorize
+
+    samples = [
+        (1.00, 1e-6, 1e-8),
+        (1.50, 1e6, 1e4),
+        (2.50, 1.0, 0.05),
+        (4.20, 1.0, 0.05),
+    ]
+    res = colorize(
+        {
+            "wavelength_um": [s[0] for s in samples],
+            "flux": [s[1] for s in samples],
+            "flux_error": [s[2] for s in samples],
+        }
+    )
+    assert res["tag"] in ("blue/hot", "neutral", "red/cool", "dusty/IR excess", INSUFFICIENT_TAG)
+    out = build_layer.compute_star_ir_color(samples)
+    assert out["ir_tag"] in ("blue/hot", "neutral", "red/cool", "dusty/IR excess", INSUFFICIENT_TAG)
+    if out["ir_tag"] == INSUFFICIENT_TAG:
+        assert out["ir_rgb"] is None
+    else:
+        assert out["ir_rgb"] is not None and len(out["ir_rgb"]) == 3
 
 
 def test_motion_physics_and_astropy_agreement():
