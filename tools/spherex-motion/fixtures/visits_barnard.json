@@ -1,0 +1,637 @@
+{
+ "target": "Barnard's Star (Gaia DR3 4472832130942575872)",
+ "search_pos_deg": [
+  269.45,
+  4.77
+ ],
+ "note": "Found by FITS header WCS scan of the AWS mirror because IRSA SIA2/TAP returned 502 on 2026-11-14 ~09:28 PT. MWIR twin detector = det+3 (same sky).",
+ "visits": [
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0501_1D2",
+   "date_avg_utc": "2026-03-15T00:47:02.657",
+   "mjd_avg": 61114.032669638,
+   "detector": 2,
+   "target_pix": [
+    843.3,
+    643.6
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1377.8947198740295,
+    -6695.101174413329,
+    1650.166852664535
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_1D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_1D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_1D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0501_2D2",
+   "date_avg_utc": "2026-03-15T00:49:11.588",
+   "mjd_avg": 61114.034161895,
+   "detector": 2,
+   "target_pix": [
+    841.7,
+    528.1
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1451.4849968315045,
+    -6381.597834581063,
+    2565.7758688472372
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_2D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_2D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_2D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0501_3D2",
+   "date_avg_utc": "2026-03-15T00:51:20.519",
+   "mjd_avg": 61114.035654152,
+   "detector": 2,
+   "target_pix": [
+    840.0,
+    412.5
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1497.3920776123375,
+    -5946.377990720774,
+    3432.3180487834816
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_3D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_3D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_3D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0501_4D2",
+   "date_avg_utc": "2026-03-15T00:53:29.449",
+   "mjd_avg": 61114.037146398,
+   "detector": 2,
+   "target_pix": [
+    838.4,
+    296.9
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1514.732497377018,
+    -5397.709468147134,
+    4233.202207786911
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_4D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_4D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0501_4D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0513_1D2",
+   "date_avg_utc": "2026-03-15T02:24:19.845",
+   "mjd_avg": 61114.100229685,
+   "detector": 2,
+   "target_pix": [
+    856.4,
+    1564.8
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1350.3462424047098,
+    -6748.445908834828,
+    1444.4897351214174
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_1D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_1D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_1D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0513_2D2",
+   "date_avg_utc": "2026-03-15T02:26:28.777",
+   "mjd_avg": 61114.101721953,
+   "detector": 2,
+   "target_pix": [
+    854.7,
+    1449.7
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1430.1810579188718,
+    -6462.593436567806,
+    2368.554875296251
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_2D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_2D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_2D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0513_3D2",
+   "date_avg_utc": "2026-03-15T02:28:37.707",
+   "mjd_avg": 61114.103214198,
+   "detector": 2,
+   "target_pix": [
+    853.0,
+    1334.5
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1482.741258420343,
+    -6053.482829510409,
+    3247.324820815961
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_3D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_3D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_3D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0513_4D2",
+   "date_avg_utc": "2026-03-15T02:30:46.638",
+   "mjd_avg": 61114.104706455,
+   "detector": 2,
+   "target_pix": [
+    851.3,
+    1219.3
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1507.0154119481863,
+    -5528.879898775376,
+    4063.9751795694697
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_4D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_4D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0513_4D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0550_1D2",
+   "date_avg_utc": "2026-03-15T07:18:51.039",
+   "mjd_avg": 61114.304757393,
+   "detector": 2,
+   "target_pix": [
+    837.0,
+    181.5
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1376.2997244424791,
+    -6604.537916833939,
+    1979.564396520016
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0550_1D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0550_1D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0550_1D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W11_2A_0550_2D2",
+   "date_avg_utc": "2026-03-15T07:20:59.970",
+   "mjd_avg": 61114.30624965,
+   "detector": 2,
+   "target_pix": [
+    835.3,
+    65.9
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1441.9187369278486,
+    -6247.28241712981,
+    2879.733253965233
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0550_2D2_spx_l2b-v27-2026-234.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0550_2D2_spx_l2b-v27-2026-234.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W11_2A/l2b-v27-2026-234/2/level2_2026W11_2A_0550_2D2_spx_l2b-v27-2026-234.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0311_1D2",
+   "date_avg_utc": "2026-03-17T16:20:22.625",
+   "mjd_avg": 61116.680817416,
+   "detector": 2,
+   "target_pix": [
+    849.5,
+    1104.6
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1101.1284432170203,
+    -6669.694016054996,
+    1928.7970996300842
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_1D2_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_1D2_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_1D2_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0311_2D2",
+   "date_avg_utc": "2026-03-17T16:22:31.556",
+   "mjd_avg": 61116.682309673,
+   "detector": 2,
+   "target_pix": [
+    847.9,
+    989.3
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1182.3953000813965,
+    -6322.080304601556,
+    2831.6280420395306
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_2D2_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_2D2_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_2D2_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0311_3D2",
+   "date_avg_utc": "2026-03-17T16:24:40.486",
+   "mjd_avg": 61116.683801918,
+   "detector": 2,
+   "target_pix": [
+    846.3,
+    873.9
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1240.72650903986,
+    -5857.904977567708,
+    3673.8829042527886
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_3D2_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_3D2_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_3D2_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0311_4D2",
+   "date_avg_utc": "2026-03-17T16:26:49.417",
+   "mjd_avg": 61116.685294175,
+   "detector": 2,
+   "target_pix": [
+    844.5,
+    758.5
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1275.9205549136088,
+    -5278.695577480214,
+    4452.677955959351
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_4D2_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_4D2_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/2/level2_2026W12_1A_0311_4D2_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0598_1D3",
+   "date_avg_utc": "2026-03-19T07:26:15.140",
+   "mjd_avg": 61118.309897451,
+   "detector": 3,
+   "target_pix": [
+    465.6,
+    1537.7
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -895.9598484538504,
+    -6747.437128718601,
+    1757.3111838193065
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_1D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_1D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_1D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0598_2D3",
+   "date_avg_utc": "2026-03-19T07:28:24.072",
+   "mjd_avg": 61118.311389719,
+   "detector": 3,
+   "target_pix": [
+    464.8,
+    1422.8
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -990.257689389148,
+    -6425.357938831922,
+    2668.3191498266215
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_2D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_2D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_2D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0598_3D3",
+   "date_avg_utc": "2026-03-19T07:30:33.003",
+   "mjd_avg": 61118.312881976,
+   "detector": 3,
+   "target_pix": [
+    463.9,
+    1307.9
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1065.6513253651115,
+    -5980.625483720924,
+    3528.2552532324944
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_3D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_3D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_3D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0598_4D3",
+   "date_avg_utc": "2026-03-19T07:32:41.935",
+   "mjd_avg": 61118.314374245,
+   "detector": 3,
+   "target_pix": [
+    463.0,
+    1192.9
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1120.695563181909,
+    -5421.6936507581995,
+    4320.640295304289
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_4D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_4D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0598_4D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0610_1D3",
+   "date_avg_utc": "2026-03-19T09:03:53.818",
+   "mjd_avg": 61118.377706224,
+   "detector": 3,
+   "target_pix": [
+    462.5,
+    1078.4
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -882.8090862143982,
+    -6761.704555040371,
+    1709.1828064145293
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_1D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_1D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_1D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0610_2D3",
+   "date_avg_utc": "2026-03-19T09:06:02.748",
+   "mjd_avg": 61118.379198469,
+   "detector": 3,
+   "target_pix": [
+    461.6,
+    963.3
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -977.7125627797216,
+    -6449.222344847781,
+    2615.385692767787
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_2D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_2D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_2D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0610_3D3",
+   "date_avg_utc": "2026-03-19T09:08:11.679",
+   "mjd_avg": 61118.380690726,
+   "detector": 3,
+   "target_pix": [
+    460.7,
+    848.2
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1054.7684090220796,
+    -6011.676792544915,
+    3478.825311946289
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_3D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_3D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_3D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_1A_0610_4D3",
+   "date_avg_utc": "2026-03-19T09:10:20.610",
+   "mjd_avg": 61118.382182983,
+   "detector": 3,
+   "target_pix": [
+    459.9,
+    733.0
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -1111.6829888274815,
+    -5459.347645177359,
+    4275.664868473443
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_4D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_4D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_1A/l2b-v27-2026-235/3/level2_2026W12_1A_0610_4D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0324_1D3",
+   "date_avg_utc": "2026-03-21T06:42:08.477",
+   "mjd_avg": 61120.279264777,
+   "detector": 3,
+   "target_pix": [
+    455.7,
+    157.1
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -709.3269352400324,
+    -6667.531057749956,
+    2106.010083229769
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0324_1D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0324_1D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0324_1D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0324_2D3",
+   "date_avg_utc": "2026-03-21T06:44:17.408",
+   "mjd_avg": 61120.280757034,
+   "detector": 3,
+   "target_pix": [
+    454.8,
+    41.7
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -809.0871880842304,
+    -6301.359443280539,
+    2999.83220795283
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0324_2D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0324_2D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0324_2D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0371_2D2",
+   "date_avg_utc": "2026-03-21T13:13:47.648",
+   "mjd_avg": 61120.551245923,
+   "detector": 2,
+   "target_pix": [
+    1788.4,
+    1933.6
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -708.3749898097919,
+    -6578.775237839437,
+    2366.2783679333543
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_2D2_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_2D2_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_2D2_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0371_3D2",
+   "date_avg_utc": "2026-03-21T13:15:56.579",
+   "mjd_avg": 61120.55273818,
+   "detector": 2,
+   "target_pix": [
+    1787.2,
+    1818.8
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -805.7230544234684,
+    -6177.843738498788,
+    3245.4259101948555
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_3D2_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_3D2_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_3D2_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0371_4D2",
+   "date_avg_utc": "2026-03-21T13:18:05.509",
+   "mjd_avg": 61120.554230425,
+   "detector": 2,
+   "target_pix": [
+    1786.0,
+    1703.9
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -887.6799366562814,
+    -5658.9053220868245,
+    4062.4140276370745
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_4D2_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_4D2_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0371_4D2_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0496_1D2",
+   "date_avg_utc": "2026-03-22T05:29:34.503",
+   "mjd_avg": 61121.22887156,
+   "detector": 2,
+   "target_pix": [
+    1785.3,
+    1589.6
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -535.6906314826801,
+    -6828.009041808017,
+    1580.7747537792832
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0496_1D2_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0496_1D2_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/2/level2_2026W12_2A_0496_1D2_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0520_1D3",
+   "date_avg_utc": "2026-03-22T08:45:17.948",
+   "mjd_avg": 61121.364791062,
+   "detector": 3,
+   "target_pix": [
+    459.2,
+    618.3
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -531.6037565677105,
+    -6805.747844625164,
+    1674.494785076996
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_1D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_1D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_1D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0520_2D3",
+   "date_avg_utc": "2026-03-22T08:47:26.880",
+   "mjd_avg": 61121.36628333,
+   "detector": 3,
+   "target_pix": [
+    458.3,
+    503.1
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -643.6226383253951,
+    -6500.196234071894,
+    2589.333256764865
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_2D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_2D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_2D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0520_3D3",
+   "date_avg_utc": "2026-03-22T08:49:35.810",
+   "mjd_avg": 61121.367775576,
+   "detector": 3,
+   "target_pix": [
+    457.4,
+    387.7
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -742.6206221814729,
+    -6074.326170791177,
+    3448.05919963203
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_3D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_3D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_3D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_dr1",
+   "obsid": "2026W12_2A_0520_4D3",
+   "date_avg_utc": "2026-03-22T08:51:44.741",
+   "mjd_avg": 61121.369267833,
+   "detector": 3,
+   "target_pix": [
+    456.5,
+    272.3
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -828.2598957278428,
+    -5529.532809246091,
+    4247.720469546449
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_4D3_spx_l2b-v27-2026-235.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_4D3_spx_l2b-v27-2026-235.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2026W12_2A/l2b-v27-2026-235/3/level2_2026W12_2A_0520_4D3_spx_l2b-v27-2026-235.fits?center=269.4486,4.7398&size=0.1"
+  },
+  {
+   "collection": "spherex_qr3",
+   "obsid": "2026W39_1A_0371_1D2",
+   "date_avg_utc": "2026-09-22T15:05:18.540",
+   "mjd_avg": 61305.628686803,
+   "detector": 2,
+   "target_pix": [
+    1940.1,
+    472.4
+   ],
+   "sc_xyz_km_geocenter_start": [
+    -599.0186802993301,
+    -6367.668653026039,
+    -2908.6233922716474
+   ],
+   "s3_url": "https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/qr3/level2/2026W39_1A/l2b-v27-2026-268/2/level2_2026W39_1A_0371_1D2_spx_l2b-v27-2026-268.fits",
+   "irsa_url": "https://irsa.ipac.caltech.edu/ibe/data/spherex/qr3/level2/2026W39_1A/l2b-v27-2026-268/2/level2_2026W39_1A_0371_1D2_spx_l2b-v27-2026-268.fits",
+   "irsa_cutout": "https://irsa.ipac.caltech.edu/ibe/data/spherex/qr3/level2/2026W39_1A/l2b-v27-2026-268/2/level2_2026W39_1A_0371_1D2_spx_l2b-v27-2026-268.fits?center=269.4486,4.7398&size=0.1"
+  }
+ ]
+}
