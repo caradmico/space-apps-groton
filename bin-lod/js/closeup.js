@@ -1,4 +1,5 @@
 export const MAX_BODIES = 4;
+export const FLY_SECONDS = 4;
 
 export const RECIPES = {
   1: { name: "G-star", kind: 0 },
@@ -77,6 +78,129 @@ export function normalizeEmission({ dbLum, d, radius, limb = 0.6 }) {
   const denom = discFluxFactor(d, radius, limb);
   return denom > 0 ? targetFlux / denom : 0;
 }
+
+function posArray(p) {
+  return Array.isArray(p) ? [p[0], p[1], p[2]] : [p.x, p.y, p.z];
+}
+
+const DEFAULT_DIR_RAW = [1.2, 0.6, 4.3];
+const DEFAULT_DIR_LEN = Math.hypot(DEFAULT_DIR_RAW[0], DEFAULT_DIR_RAW[1], DEFAULT_DIR_RAW[2]);
+const DEFAULT_DIR = [
+  DEFAULT_DIR_RAW[0] / DEFAULT_DIR_LEN,
+  DEFAULT_DIR_RAW[1] / DEFAULT_DIR_LEN,
+  DEFAULT_DIR_RAW[2] / DEFAULT_DIR_LEN,
+];
+
+export function frameBodies(bodies, fovDeg = 55, aspect = 1, margin = 1.15) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  const pts = bodies.map((b) => {
+    const p = posArray(b.position);
+    const r = b.radius || 0;
+    if (p[0] - r < minX) minX = p[0] - r;
+    if (p[1] - r < minY) minY = p[1] - r;
+    if (p[2] - r < minZ) minZ = p[2] - r;
+    if (p[0] + r > maxX) maxX = p[0] + r;
+    if (p[1] + r > maxY) maxY = p[1] + r;
+    if (p[2] + r > maxZ) maxZ = p[2] + r;
+    return { p, r };
+  });
+
+  const target = [0.5 * (minX + maxX), 0.5 * (minY + maxY), 0.5 * (minZ + maxZ)];
+  let boundR = 1e-4;
+  for (const { p, r } of pts) {
+    const d = Math.hypot(p[0] - target[0], p[1] - target[1], p[2] - target[2]) + r;
+    if (d > boundR) boundR = d;
+  }
+
+  const vHalf = ((fovDeg || 55) * Math.PI) / 360;
+  const tanV = Math.max(1e-6, Math.tan(vHalf));
+  const safeAspect = Math.max(1e-6, aspect || 1);
+  const hHalf = Math.atan(tanV * safeAspect);
+  const minHalfAngle = Math.max(1e-4, Math.min(vHalf, hHalf));
+  const effR = boundR * Math.max(1, margin);
+  const distance = effR / Math.sin(minHalfAngle);
+
+  const dir = [DEFAULT_DIR[0], DEFAULT_DIR[1], DEFAULT_DIR[2]];
+  const cameraPos = [
+    target[0] + dir[0] * distance,
+    target[1] + dir[1] * distance,
+    target[2] + dir[2] * distance,
+  ];
+  return { target, distance, dir, cameraPos };
+}
+
+export function projectToNdc(point, cameraPos, target, fovDeg = 55, aspect = 1) {
+  const pt = posArray(point);
+  const cam = posArray(cameraPos);
+  const tgt = posArray(target);
+
+  let fx = tgt[0] - cam[0];
+  let fy = tgt[1] - cam[1];
+  let fz = tgt[2] - cam[2];
+  const fLen = Math.hypot(fx, fy, fz) || 1;
+  fx /= fLen; fy /= fLen; fz /= fLen;
+
+  // right = normalize(cross(fwd, [0,1,0])) = normalize([-fz, 0, fx])
+  let rx = -fz, ry = 0, rz = fx;
+  const rLen = Math.hypot(rx, ry, rz) || 1;
+  rx /= rLen; ry /= rLen; rz /= rLen;
+
+  // up = cross(right, fwd)
+  const ux = ry * fz - rz * fy;
+  const uy = rz * fx - rx * fz;
+  const uz = rx * fy - ry * fx;
+
+  const vx = pt[0] - cam[0];
+  const vy = pt[1] - cam[1];
+  const vz = pt[2] - cam[2];
+
+  const cx = vx * rx + vy * ry + vz * rz;
+  const cy = vx * ux + vy * uy + vz * uz;
+  const depth = vx * fx + vy * fy + vz * fz;
+
+  const tanHalf = Math.tan(((fovDeg || 55) * Math.PI) / 360);
+  const safeDepth = Math.max(1e-9, Math.abs(depth)) * (depth < 0 ? -1 : 1);
+  const ndcX = cx / (safeDepth * tanHalf * (aspect || 1));
+  const ndcY = cy / (safeDepth * tanHalf);
+  return [ndcX, ndcY, depth];
+}
+
+export function lockedTarget(current, anchor, active, lockEnabled = true) {
+  const cur = posArray(current);
+  if (!active || !lockEnabled || !anchor) return cur;
+  const a = posArray(anchor);
+  return [a[0], a[1], a[2]];
+}
+
+export function flyStartDistance(radius, fovDeg = 55, viewportShortSidePx = 800, viewportHeightPx = 800, f0 = 0.02) {
+  const tanHalf = Math.max(1e-6, Math.tan(((fovDeg || 55) * Math.PI) / 360));
+  const h = Math.max(1, viewportHeightPx);
+  const minHalf = Math.max(1, viewportShortSidePx * 0.5);
+  const targetFrac = Math.max(1e-6, 0.5 * f0);
+  // fraction = (radius / d) * (h / (2 * tanHalf)) / minHalf = targetFrac
+  return (radius * h) / (2 * tanHalf * minHalf * targetFrac);
+}
+
+export function flyEase(t) {
+  const x = clamp(t, 0, 1);
+  return x * x * (3 - 2 * x);
+}
+
+export function flyInDistance(t, startDist, endDist) {
+  const s = Math.max(1e-6, startDist);
+  const e = Math.max(1e-6, endDist);
+  const u = flyEase(t);
+  if (u <= 0) return s;
+  if (u >= 1) return e;
+  return Math.exp(Math.log(s) * (1 - u) + Math.log(e) * u);
+}
+
+export function handoffMix(weight) {
+  const w = clamp(weight, 0, 1);
+  return { point: 1 - w, disc: w };
+}
+
 const VERT = /* glsl */ `
 varying vec2 vUv;
 void main() {
@@ -227,6 +351,8 @@ void main() {
 export function attachCloseup({ THREE, scene, camera, renderer, controls }) {
   const params = typeof location !== "undefined" ? new URLSearchParams(location.search) : new URLSearchParams();
   const scale = clamp(parseFloat(params.get("closeupScale")) || 0.5, 0.1, 1.0);
+  const lockEnabled = params.get("closeupLock") !== "0";
+  const flyEnabled = params.get("closeup") === "1" && params.get("closeupFly") !== "0";
   const isCoarse = typeof matchMedia === "function" && matchMedia("(pointer:coarse)").matches;
   const steps = isCoarse ? 32 : 48;
 
@@ -241,18 +367,78 @@ export function attachCloseup({ THREE, scene, camera, renderer, controls }) {
     };
   });
 
-  if (params.get("closeup") === "1" && params.get("closeupFly") !== "0") {
-    camera.position.set(demoCenter.x + 1.2, demoCenter.y + 0.6, demoCenter.z + 4.3);
+  const size = new THREE.Vector2();
+  renderer.getDrawingBufferSize(size);
+  const initAspect = size.y > 0 ? size.x / size.y : camera.aspect || 1.0;
+  const initFov = camera.fov || 55;
+  let framed = frameBodies(bodies, initFov, initAspect);
+  const anchorTargetVec = new THREE.Vector3().fromArray(framed.target);
+  const anchorDirVec = new THREE.Vector3().fromArray(framed.dir);
+
+  const star = bodies[0];
+  const shortSidePx = Math.max(1, Math.min(size.x, size.y));
+  const heightPx = Math.max(1, size.y);
+  let startDist = Math.max(
+    framed.distance,
+    flyStartDistance(star.radius, initFov, shortSidePx, heightPx)
+  );
+
+  let flyT = flyEnabled ? 0 : 1;
+  let flyDone = !flyEnabled;
+  let lastTimeMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+
+  if (flyEnabled) {
+    camera.position.copy(anchorTargetVec).addScaledVector(anchorDirVec, startDist);
     if (controls?.target) {
-      controls.target.copy(demoCenter);
+      controls.target.copy(anchorTargetVec);
       controls.update?.();
     } else {
-      camera.lookAt(demoCenter);
+      camera.lookAt(anchorTargetVec);
     }
   }
 
-  const size = new THREE.Vector2();
-  renderer.getDrawingBufferSize(size);
+  const onControlsStart = () => {
+    flyDone = true;
+    state.flyDone = true;
+  };
+  if (controls && typeof controls.addEventListener === "function") {
+    controls.addEventListener("start", onControlsStart);
+  }
+
+  // Far-view point sprite for the demo star so the point -> disc handoff is visible
+  const spriteGeo = new THREE.BufferGeometry();
+  const spritePositions = new Float32Array([star.position.x, star.position.y, star.position.z]);
+  spriteGeo.setAttribute("position", new THREE.BufferAttribute(spritePositions, 3));
+  const dpr = typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1;
+  const spriteMat = new THREE.PointsMaterial({
+    size: 6 * dpr,
+    sizeAttenuation: false,
+    color: star.color.clone(),
+    transparent: true,
+    opacity: 1.0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+  });
+  const spritePoints = new THREE.Points(spriteGeo, spriteMat);
+  spritePoints.frustumCulled = false;
+  const spriteScene = new THREE.Scene();
+  spriteScene.add(spritePoints);
+
+  // Optional HUD indicator
+  let hudEl = null;
+  let hudFrame = 0;
+  const parentEl = renderer?.domElement?.parentElement;
+  if (typeof document !== "undefined" && parentEl) {
+    hudEl = document.createElement("div");
+    hudEl.setAttribute("aria-hidden", "true");
+    hudEl.style.cssText =
+      "position:absolute;right:12px;top:12px;pointer-events:none;font:12px system-ui,sans-serif;color:#cde;background:rgba(8,12,20,0.55);padding:3px 7px;border-radius:4px;z-index:5;";
+    hudEl.textContent = "Close-up: point 100% · disc 0%";
+    parentEl.appendChild(hudEl);
+  }
+
   const rtW = Math.max(1, Math.floor(size.x * scale));
   const rtH = Math.max(1, Math.floor(size.y * scale));
 
@@ -332,7 +518,19 @@ export function attachCloseup({ THREE, scene, camera, renderer, controls }) {
   compMesh.frustumCulled = false;
   compScene.add(compMesh);
 
-  const state = { weight: 0, fraction: 0, scale, steps };
+  const state = {
+    weight: 0,
+    fraction: 0,
+    scale,
+    steps,
+    pointAlpha: 1,
+    flyT,
+    flyDone,
+    relocks: 0,
+    anchor: { target: framed.target.slice(), distance: framed.distance },
+  };
+
+  let lastAspect = initAspect;
 
   function render() {
     renderer.getDrawingBufferSize(size);
@@ -342,6 +540,48 @@ export function attachCloseup({ THREE, scene, camera, renderer, controls }) {
       rt.setSize(targetW, targetH);
     }
 
+    const fovDeg = camera.fov || 55;
+    const aspect = size.y > 0 ? size.x / size.y : camera.aspect || 1.0;
+
+    if (!flyDone && Math.abs(aspect - lastAspect) > 1e-4) {
+      lastAspect = aspect;
+      framed = frameBodies(bodies, fovDeg, aspect);
+      anchorTargetVec.fromArray(framed.target);
+      anchorDirVec.fromArray(framed.dir);
+      state.anchor.target = framed.target.slice();
+      state.anchor.distance = framed.distance;
+    }
+
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const dt = clamp((nowMs - lastTimeMs) * 0.001, 0, 0.1);
+    lastTimeMs = nowMs;
+
+    if (!flyDone) {
+      flyT = clamp(flyT + dt / FLY_SECONDS, 0, 1);
+      const curDist = flyInDistance(flyT, startDist, framed.distance);
+      camera.position.copy(anchorTargetVec).addScaledVector(anchorDirVec, curDist);
+      if (controls?.target) {
+        controls.target.copy(anchorTargetVec);
+      } else {
+        camera.lookAt(anchorTargetVec);
+      }
+      if (flyT >= 1) {
+        flyDone = true;
+      }
+      state.flyT = flyT;
+      state.flyDone = flyDone;
+    }
+
+    // Target lock: if host snapped controls.target away while closeup is active, restore anchor target
+    const isActive = !flyDone || state.weight > 0;
+    if (controls?.target && isActive && lockEnabled) {
+      if (controls.target.distanceToSquared(anchorTargetVec) > 1e-12) {
+        const nextTgt = lockedTarget(controls.target, framed.target, isActive, lockEnabled);
+        controls.target.set(nextTgt[0], nextTgt[1], nextTgt[2]);
+        state.relocks++;
+      }
+    }
+
     camera.updateMatrixWorld();
     const e = camera.matrixWorld.elements;
     uniforms.uCamRight.value.set(e[0], e[1], e[2]).normalize();
@@ -349,20 +589,39 @@ export function attachCloseup({ THREE, scene, camera, renderer, controls }) {
     uniforms.uCamFwd.value.set(-e[8], -e[9], -e[10]).normalize();
     uniforms.uCamPos.value.set(e[12], e[13], e[14]);
 
-    const fovRad = THREE.MathUtils.degToRad(camera.fov || 50);
+    const fovRad = THREE.MathUtils.degToRad(fovDeg);
     uniforms.uTanHalfFov.value = Math.tan(fovRad * 0.5);
-    uniforms.uAspect.value = size.y > 0 ? size.x / size.y : camera.aspect || 1.0;
+    uniforms.uAspect.value = aspect;
 
-    const star = bodies[0];
     const d = Math.max(1e-4, uniforms.uCamPos.value.distanceTo(star.position));
     const projRadiusPx = (star.radius / d) * (size.y / (2 * uniforms.uTanHalfFov.value));
     const minHalf = Math.max(1, Math.min(size.x, size.y) * 0.5);
     const fraction = projRadiusPx / minHalf;
     const weight = closeupWeight(fraction);
+    const mix = handoffMix(weight);
 
     state.fraction = fraction;
     state.weight = weight;
-    if (weight <= 0) return;
+    state.pointAlpha = mix.point;
+
+    if (hudEl && (hudFrame++ % 6 === 0 || weight === 0 || weight === 1)) {
+      hudEl.textContent = `Close-up: point ${Math.round(mix.point * 100)}% · disc ${Math.round(mix.disc * 100)}%`;
+    }
+
+    const prevTarget = renderer.getRenderTarget();
+    const prevAutoClear = renderer.autoClear;
+
+    if (mix.point >= 1e-3) {
+      spriteMat.opacity = mix.point;
+      renderer.setRenderTarget(prevTarget);
+      renderer.autoClear = false;
+      renderer.render(spriteScene, camera);
+    }
+
+    if (weight <= 0) {
+      renderer.autoClear = prevAutoClear;
+      return;
+    }
 
     for (let i = 0; i < bodies.length; i++) {
       const b = bodies[i];
@@ -378,9 +637,6 @@ export function attachCloseup({ THREE, scene, camera, renderer, controls }) {
 
     uniforms.uWeight.value = weight;
 
-    const prevTarget = renderer.getRenderTarget();
-    const prevAutoClear = renderer.autoClear;
-
     renderer.setRenderTarget(rt);
     renderer.autoClear = true;
     renderer.render(marchScene, orthoCam);
@@ -392,10 +648,18 @@ export function attachCloseup({ THREE, scene, camera, renderer, controls }) {
   }
 
   function dispose() {
+    if (controls && typeof controls.removeEventListener === "function") {
+      controls.removeEventListener("start", onControlsStart);
+    }
+    if (hudEl && hudEl.parentElement) {
+      hudEl.parentElement.removeChild(hudEl);
+    }
     rt.dispose();
     quadGeo.dispose();
     marchMat.dispose();
     compMat.dispose();
+    spriteGeo.dispose();
+    spriteMat.dispose();
   }
 
   const api = { render, dispose, state };
