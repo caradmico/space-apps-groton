@@ -10,13 +10,13 @@ export const ZOOM_STORAGE_KEY = "staris-zoom";
 // Proportionality constants k[level] such that step = k * d * strength:
 // - fine:   k = 0.05  -> at 10 AU, step = 0.5 AU (in [0.05, 1] AU); at 1 AU, step = 0.05 AU (< 0.25 AU)
 // - medium: k = 0.20  -> at 10 pc, step = 2.0 pc (in [1.5, 2.5] pc)
-// - coarse: k = 2.20  -> multiplier (1 + 2.2) = 3.2x per step:
-//                        from 1 pc: 3.2^10 ≈ 1.12e5 pc (10 steps <= 12)
-//                        from 100 AU (4.848e-4 pc): 4.848e-4 * 3.2^16 ≈ 5.84e4, 16 steps with floor boost reaches > 1e5
+// - coarse: k = 2.60  -> multiplier (1 + 2.6) = 3.6x per step:
+//                        from 1 pc: 3.6^9 ≈ 1.01e5 pc (9 steps <= 12)
+//                        from 100 AU (4.848e-4 pc): 4.848e-4 * 3.6^15 ≈ 1.07e5 (15 steps <= 16)
 const LEVEL_FACTORS = {
   fine: 0.05,
   medium: 0.20,
-  coarse: 2.60, // 3.6^10 > 1e5 (9 steps from 1 pc); from 100 AU (4.848e-4 pc), 4.848e-4 * 3.6^15 = 1.07e5 (15 steps <= 16)
+  coarse: 2.60,
 };
 
 const LEVEL_FLOORS_PC = {
