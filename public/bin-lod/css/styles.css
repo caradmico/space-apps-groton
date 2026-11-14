@@ -321,3 +321,36 @@ canvas {
 .overlay-tip li {
   margin: 0.1rem 0;
 }
+
+/* SPHEREx motion layer (?spherex=1) */
+.spherex-chip input[type="range"] {
+  width: 7.5rem;
+  accent-color: #60a5fa;
+  cursor: pointer;
+}
+
+.spherex-chip button {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.12rem 0.48rem;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.spherex-chip button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+#spherex-inset {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  width: 240px;
+  height: 240px;
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 12;
+}
