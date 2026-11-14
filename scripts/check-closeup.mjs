@@ -5,6 +5,14 @@ import {
   tempToRGB,
   RECIPES,
   DEMO_SYSTEM,
+  FLY_SECONDS,
+  frameBodies,
+  projectToNdc,
+  lockedTarget,
+  flyStartDistance,
+  flyEase,
+  flyInDistance,
+  handoffMix,
 } from "../public/bin-lod/js/closeup.js";
 
 let passed = 0;
@@ -110,6 +118,198 @@ for (let i = 0; i < 3; i++) {
     `tempToRGB(5800) channel ${i}: actual=${rgb[i]} ref=${ref[i]}`
   );
 }
+
+// A. Framing (Gap 1): both star and planet fit inside desktop & mobile viewports
+const anchorCenter = [65, -66, -33];
+const demoBodies = DEMO_SYSTEM.map((b) => ({
+  ...b,
+  position: [
+    anchorCenter[0] + b.offset[0],
+    anchorCenter[1] + b.offset[1],
+    anchorCenter[2] + b.offset[2],
+  ],
+}));
+const viewports = [
+  { name: "desktop", w: 1440, h: 900 },
+  { name: "mobile", w: 390, h: 844 },
+];
+const fovDeg = 55;
+const tanHalfFov = Math.tan((fovDeg * Math.PI) / 360);
+
+for (const vp of viewports) {
+  const aspect = vp.w / vp.h;
+  const framed = frameBodies(demoBodies, fovDeg, aspect);
+
+  // Camera basis for limb-offset checks
+  let fx = framed.target[0] - framed.cameraPos[0];
+  let fy = framed.target[1] - framed.cameraPos[1];
+  let fz = framed.target[2] - framed.cameraPos[2];
+  const fl = Math.hypot(fx, fy, fz) || 1;
+  fx /= fl; fy /= fl; fz /= fl;
+  let rx = -fz, ry = 0, rz = fx;
+  const rl = Math.hypot(rx, ry, rz) || 1;
+  rx /= rl; ry /= rl; rz /= rl;
+  const ux = ry * fz - rz * fy;
+  const uy = rz * fx - rx * fz;
+  const uz = rx * fy - ry * fx;
+
+  for (let bi = 0; bi < demoBodies.length; bi++) {
+    const b = demoBodies[bi];
+    const [nx, ny, depth] = projectToNdc(b.position, framed.cameraPos, framed.target, fovDeg, aspect);
+    check(depth > 0, `framing ${vp.name} body ${bi} depth > 0 (${depth})`);
+    check(Math.abs(nx) <= 1 && Math.abs(ny) <= 1, `framing ${vp.name} body ${bi} center in NDC (${nx}, ${ny})`);
+
+    const extremes = [
+      [b.position[0] + rx * b.radius, b.position[1] + ry * b.radius, b.position[2] + rz * b.radius],
+      [b.position[0] - rx * b.radius, b.position[1] - ry * b.radius, b.position[2] - rz * b.radius],
+      [b.position[0] + ux * b.radius, b.position[1] + uy * b.radius, b.position[2] + uz * b.radius],
+      [b.position[0] - ux * b.radius, b.position[1] - uy * b.radius, b.position[2] - uz * b.radius],
+    ];
+    for (const ex of extremes) {
+      const [exX, exY] = projectToNdc(ex, framed.cameraPos, framed.target, fovDeg, aspect);
+      check(
+        Math.abs(exX) <= 1 && Math.abs(exY) <= 1,
+        `framing ${vp.name} body ${bi} limb inside NDC (${exX.toFixed(3)}, ${exY.toFixed(3)})`
+      );
+    }
+  }
+
+  const star = demoBodies[0];
+  const dStar = Math.hypot(
+    framed.cameraPos[0] - star.position[0],
+    framed.cameraPos[1] - star.position[1],
+    framed.cameraPos[2] - star.position[2]
+  );
+  const projStarPx = (star.radius / dStar) * (vp.h / (2 * tanHalfFov));
+  const minHalf = Math.min(vp.w, vp.h) * 0.5;
+  const starFrac = projStarPx / minHalf;
+  check(
+    closeupWeight(starFrac) === 1,
+    `framing ${vp.name} star fraction=${starFrac.toFixed(4)} gives closeupWeight === 1`
+  );
+
+  const planet = demoBodies[1];
+  const dPlanet = Math.hypot(
+    framed.cameraPos[0] - planet.position[0],
+    framed.cameraPos[1] - planet.position[1],
+    framed.cameraPos[2] - planet.position[2]
+  );
+  const projPlanetPx = (planet.radius / dPlanet) * (vp.h / (2 * tanHalfFov));
+  check(projPlanetPx >= 2, `framing ${vp.name} planet radius >= 2px (${projPlanetPx.toFixed(2)}px)`);
+}
+
+// B. Target lock (Gap 1): undoes host catalog snap while active
+const desktopFramed = frameBodies(demoBodies, fovDeg, 1440 / 900);
+const snappedTarget = [-12, 44, 108];
+const locked1 = lockedTarget(snappedTarget, desktopFramed.target, true, true);
+check(
+  locked1[0] === desktopFramed.target[0] &&
+    locked1[1] === desktopFramed.target[1] &&
+    locked1[2] === desktopFramed.target[2],
+  "lockedTarget returns anchor when active and lockEnabled"
+);
+const locked2 = lockedTarget(snappedTarget, desktopFramed.target, false, true);
+check(
+  locked2[0] === snappedTarget[0] && locked2[1] === snappedTarget[1] && locked2[2] === snappedTarget[2],
+  "lockedTarget returns current when inactive"
+);
+const locked3 = lockedTarget(snappedTarget, desktopFramed.target, true, false);
+check(
+  locked3[0] === snappedTarget[0] && locked3[1] === snappedTarget[1] && locked3[2] === snappedTarget[2],
+  "lockedTarget returns current when lock disabled"
+);
+for (let bi = 0; bi < demoBodies.length; bi++) {
+  const [nx, ny, depth] = projectToNdc(
+    demoBodies[bi].position,
+    desktopFramed.cameraPos,
+    locked1,
+    fovDeg,
+    1440 / 900
+  );
+  check(
+    depth > 0 && Math.abs(nx) <= 1 && Math.abs(ny) <= 1,
+    `post-lock body ${bi} remains in frame (${nx.toFixed(3)}, ${ny.toFixed(3)})`
+  );
+}
+
+// C. Handoff & fly-in (Gap 2)
+check(flyEase(0) === 0 && flyEase(1) === 1, "flyEase endpoints exact");
+let prevEase = -1;
+let easeMono = true;
+for (let i = 0; i <= 100; i++) {
+  const e = flyEase(i / 100);
+  if (e < prevEase - 1e-12) easeMono = false;
+  prevEase = e;
+}
+check(easeMono, "flyEase is monotone on [0,1]");
+check(
+  flyInDistance(0, 100, 10) === 100 &&
+    flyInDistance(1, 100, 10) === 10 &&
+    flyInDistance(-0.5, 100, 10) === 100 &&
+    flyInDistance(1.5, 100, 10) === 10,
+  "flyInDistance endpoints and clamping"
+);
+
+for (const vp of viewports) {
+  const aspect = vp.w / vp.h;
+  const framed = frameBodies(demoBodies, fovDeg, aspect);
+  const shortSide = Math.min(vp.w, vp.h);
+  const minHalf = shortSide * 0.5;
+  const star = demoBodies[0];
+  const startDist = flyStartDistance(star.radius, fovDeg, shortSide, vp.h);
+
+  const totalFrames = Math.round((FLY_SECONDS + 0.5) * 60);
+  let prevW = -1;
+  let monoW = true;
+  let mixSumOk = true;
+  let midFrames = 0;
+  let wStart = -1;
+  let wEnd = -1;
+
+  for (let f = 0; f <= totalFrames; f++) {
+    const t = (f / 60) / FLY_SECONDS;
+    const dist = flyInDistance(t, startDist, framed.distance);
+    const camPos = [
+      framed.target[0] + framed.dir[0] * dist,
+      framed.target[1] + framed.dir[1] * dist,
+      framed.target[2] + framed.dir[2] * dist,
+    ];
+    const dStar = Math.hypot(
+      camPos[0] - star.position[0],
+      camPos[1] - star.position[1],
+      camPos[2] - star.position[2]
+    );
+    const projPx = (star.radius / dStar) * (vp.h / (2 * tanHalfFov));
+    const frac = projPx / minHalf;
+    const w = closeupWeight(frac);
+    const mix = handoffMix(w);
+    if (f === 0) wStart = w;
+    if (f === totalFrames) wEnd = w;
+    if (w < prevW - 1e-12) monoW = false;
+    prevW = w;
+    if (Math.abs(mix.point + mix.disc - 1) > 1e-12) mixSumOk = false;
+    if (w > 0 && w < 1) midFrames++;
+  }
+
+  check(wStart === 0 && handoffMix(wStart).point === 1, `handoff ${vp.name} starts at weight 0 / point 1`);
+  check(wEnd === 1 && handoffMix(wEnd).disc === 1, `handoff ${vp.name} ends at weight 1 / disc 1`);
+  check(monoW, `handoff ${vp.name} weight is monotone non-decreasing`);
+  check(mixSumOk, `handoff ${vp.name} point + disc === 1 every frame`);
+  check(midFrames >= 30, `handoff ${vp.name} transition spans >= 30 frames (${midFrames})`);
+}
+
+// D. No-freeze performance guard
+const t0 = performance.now();
+let sink = 0;
+for (let i = 0; i < 10000; i++) {
+  const u = (i % 1000) * 0.001;
+  const d = flyInDistance(u, 250, 12);
+  const w = closeupWeight(1 / d);
+  const m = handoffMix(w);
+  sink += m.disc;
+}
+const elapsedMs = performance.now() - t0;
+check(elapsedMs < 50 && sink >= 0, `10k fly/handoff iterations took ${elapsedMs.toFixed(2)}ms (< 50ms)`);
 
 console.log(`closeup checks: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
