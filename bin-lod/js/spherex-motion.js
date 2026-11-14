@@ -326,6 +326,25 @@ export function formatYears(y) {
   return `${sign}${(ay / 1000).toFixed(0)}k yr`;
 }
 
+export function clampInsetLabel(x, y, textWidth, textHeight, canvasW, canvasH, pad = 6, captionReserve = 16) {
+  const minX = pad;
+  const maxX = Math.max(minX, canvasW - pad - textWidth);
+  let outX = x;
+  if (outX + textWidth > canvasW - pad) {
+    outX = x - 5 - textWidth;
+  }
+  if (outX < minX) outX = minX;
+  if (outX > maxX) outX = maxX;
+
+  const minY = pad + textHeight;
+  const maxY = Math.max(minY, canvasH - captionReserve);
+  let outY = y;
+  if (outY < minY) outY = minY;
+  if (outY > maxY) outY = maxY;
+
+  return { x: outX, y: outY };
+}
+
 function sanitizeLayerUrl(url) {
   const fallback = "data/spherex/barnard-field.json";
   if (typeof url !== "string" || !url) return fallback;
@@ -592,7 +611,12 @@ export function attachSpherexMotion({ THREE, scene, camera, controls, layerUrl, 
       const clsLabel = classifyMotion(b.st, cfg);
       ctx.fillStyle = "#ffdd88";
       ctx.font = "10px sans-serif";
-      ctx.fillText(`Barnard (${clsLabel}) \u0394=${offsetDeg.toFixed(3)}\u00b0`, Math.min(W - 135, Math.max(6, bx + 5)), Math.max(14, by - 5));
+      const labelText = `Barnard (${clsLabel}) \u0394=${offsetDeg.toFixed(3)}\u00b0`;
+      const metrics = ctx.measureText(labelText);
+      const textWidth = metrics.width;
+      const textHeight = metrics.actualBoundingBoxAscent || 10;
+      const pos = clampInsetLabel(bx + 5, by - 5, textWidth, textHeight, W, H, 6, 16);
+      ctx.fillText(labelText, pos.x, pos.y);
     }
 
     const asteroids = layer.asteroids || [];
