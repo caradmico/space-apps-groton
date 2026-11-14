@@ -17,6 +17,10 @@ import {
   yearsToSlider,
   formatYears,
   clampInsetLabel,
+  IR_COLOR_CAPTION,
+  KNOWN_IR_TAGS,
+  starDisplayColor,
+  formatStarPopup,
 } from "../public/bin-lod/js/spherex-motion.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -128,6 +132,52 @@ const lodAppSrc = fs.readFileSync(lodAppPath, "utf-8");
 check(lodAppSrc.includes('get("spherex") === "1"'), 'lod-app.js checks get("spherex") === "1"');
 check(!/^\s*import\s+.*spherex-motion\.js/m.test(lodAppSrc), "lod-app.js has no static import of spherex-motion.js");
 
+
+// 7b. IR false-color helpers and rebuilt layer
+const EXPECTED_CAPTION =
+  "False color: SPHEREx sees infrared light, invisible to the eye. Blue = shorter infrared, red = longer.";
+check(IR_COLOR_CAPTION === EXPECTED_CAPTION, "IR_COLOR_CAPTION matches caption.md general line");
+
+const hotStar = {
+  name: "Test Hot Star",
+  ir_tag: "blue/hot",
+  ir_hex: "#4a8cff",
+  ir_rgb: [0.2902, 0.549, 1.0],
+  ir_caption: "Brighter at shorter infrared wavelengths, the pattern of a hotter star.",
+  gmag: 8.25,
+  detections: [{}, {}],
+};
+const rgbHot = starDisplayColor(hotStar);
+check(
+  rgbHot[0] === 0.2902 && rgbHot[1] === 0.549 && rgbHot[2] === 1.0,
+  "starDisplayColor uses ir_rgb for a colored tag"
+);
+
+const insufWithGray = {
+  name: "Test Insufficient Star",
+  ir_tag: "insufficient data",
+  ir_hex: "#808080",
+  ir_rgb: [0.502, 0.502, 0.502],
+};
+const rgbInsuf = starDisplayColor(insufWithGray);
+check(
+  rgbInsuf[0] === 1 && rgbInsuf[1] === 1 && rgbInsuf[2] === 1,
+  "starDisplayColor ignores #808080 / gray on insufficient data and returns [1,1,1]"
+);
+const rgbNull = starDisplayColor({ ir_tag: "insufficient data", ir_hex: "#808080", ir_rgb: null });
+check(
+  rgbNull[0] === 1 && rgbNull[1] === 1 && rgbNull[2] === 1,
+  "starDisplayColor returns [1,1,1] when ir_rgb is null"
+);
+
+const popupText = formatStarPopup(hotStar);
+check(
+  popupText.includes("Test Hot Star") && popupText.includes("blue/hot"),
+  "formatStarPopup includes star name and ir_tag"
+);
+check(popupText.includes("G = 8.25 mag") && popupText.includes("2 SPHEREx det."), "formatStarPopup uses gmag, not phot_g_mean_mag");
+check(!popupText.includes("phot_g_mean_mag"), "formatStarPopup does not mention phot_g_mean_mag");
+
 // 7. Optional data layer check if barnard-field.json exists
 const layerPath = path.resolve(__dirname, "../public/bin-lod/data/spherex/barnard-field.json");
 if (fs.existsSync(layerPath)) {
@@ -136,6 +186,29 @@ if (fs.existsSync(layerPath)) {
   const validClasses = new Set(["FULL_3D", "SIDEWAYS_ONLY", "STATIC"]);
   const allValid = (layer.stars || []).every((s) => validClasses.has(s.motion_class));
   check(allValid, "All stars in barnard-field.json have valid motion_class");
+  check(layer.meta && layer.meta.ir_color_caption === EXPECTED_CAPTION, "layer.meta.ir_color_caption matches caption.md line");
+  const knownSet = new Set(KNOWN_IR_TAGS);
+  const allTagsValid = (layer.stars || []).every((s) => knownSet.has(s.ir_tag));
+  check(allTagsValid, "every star in barnard-field.json has a valid ir_tag");
+  const insufNullOk = (layer.stars || []).every((s) => {
+    const noDet = !Array.isArray(s.detections) || s.detections.length === 0;
+    if (s.ir_tag === "insufficient data" || noDet) return s.ir_rgb === null;
+    return true;
+  });
+  check(insufNullOk, "insufficient data or empty-detection stars have ir_rgb === null");
+  const coloredStars = (layer.stars || []).filter((s) => s.ir_tag && s.ir_tag !== "insufficient data");
+  const coloredOk =
+    coloredStars.length > 0 &&
+    coloredStars.every(
+      (s) =>
+        typeof s.ir_hex === "string" &&
+        /^#[0-9a-fA-F]{6}$/.test(s.ir_hex) &&
+        s.ir_hex.toLowerCase() !== "#808080" &&
+        Array.isArray(s.ir_rgb) &&
+        s.ir_rgb.length === 3 &&
+        s.ir_rgb.every((c) => typeof c === "number" && c >= 0 && c <= 1)
+    );
+  check(coloredOk, "colored stars have non-gray #rrggbb ir_hex and 3-vector ir_rgb in 0..1");
 }
 
 
@@ -160,6 +233,16 @@ if (fs.existsSync(layerPath)) {
   check(long.x + 180 <= 148 - 6 || long.x === 6, "Long label starts at pad when wider than the inset");
   check(long.y - 10 >= 6 && long.y <= 148 - 16, "Long label stays inside the vertical box");
 }
+
+
+const spherexSrc = fs.readFileSync(path.resolve(__dirname, "../public/bin-lod/js/spherex-motion.js"), "utf-8");
+check(spherexSrc.includes("starDisplayColor("), "spherex-motion.js uses starDisplayColor");
+check(spherexSrc.includes("spherex-ir-caption"), "spherex-motion.js renders the IR caption in the chip");
+check(spherexSrc.includes("spherex-star-popup"), "spherex-motion.js defines #spherex-star-popup");
+check(!spherexSrc.includes("renderer.domElement.addEventListener"), "spherex-motion.js does not hook the main canvas (free-fly click-to-pivot)");
+check(!spherexSrc.includes("phot_g_mean_mag"), "spherex-motion.js does not use phot_g_mean_mag");
+const cssSrc = fs.readFileSync(path.resolve(__dirname, "../public/bin-lod/css/styles.css"), "utf-8");
+check(/#spherex-inset[\s\S]*?pointer-events:\s*auto/.test(cssSrc), "#spherex-inset allows pointer events for inset clicks");
 
 console.log(`Passed: ${passed}, Failed: ${failed}`);
 if (failed > 0) {

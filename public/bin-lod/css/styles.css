@@ -356,8 +356,38 @@ canvas {
   width: 240px;
   height: 240px;
   border-radius: 8px;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   z-index: 12;
+}
+
+.spherex-ir-caption {
+  flex: 1 1 100%;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  opacity: 0.88;
+  margin-top: 0.15rem;
+}
+
+#spherex-star-popup {
+  display: block;
+  position: absolute;
+  right: 0.75rem;
+  bottom: calc(0.75rem + 240px + 8px);
+  max-width: 280px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(10, 14, 24, 0.92);
+  border: 1px solid rgba(140, 180, 255, 0.35);
+  color: #eef4ff;
+  font: 12px/1.35 system-ui, sans-serif;
+  z-index: 45;
+  white-space: pre-line;
+  pointer-events: auto;
+}
+
+#spherex-star-popup[hidden] {
+  display: none;
 }
 
 @media (max-width: 640px) {
@@ -367,6 +397,12 @@ canvas {
     top: 0.5rem;
     right: 0.5rem;
     bottom: auto;
+  }
+  #spherex-star-popup {
+    top: calc(0.5rem + 148px + 8px);
+    right: 0.5rem;
+    bottom: auto;
+    max-width: min(280px, calc(100% - 1rem));
   }
   #canvas-wrap:has(#spherex-inset) .hud {
     max-width: calc(100% - 10rem);
