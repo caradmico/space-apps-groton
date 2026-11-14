@@ -366,4 +366,30 @@ canvas {
   #canvas-wrap:has(#spherex-inset) .hud {
     max-width: calc(100% - 10rem);
   }
+
+  /* Full-width wrap so Now / Visit / Go to patch stay visible and tappable. */
+  .spherex-chip {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center;
+    row-gap: 0.45rem;
+    border-radius: var(--radius);
+  }
+
+  .spherex-chip input[type="range"] {
+    flex: 1 1 8rem;
+    min-width: 7.5rem;
+    width: auto;
+    max-width: 100%;
+  }
+
+  .spherex-chip button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    min-height: 2rem;
+    padding: 0.35rem 0.65rem;
+  }
 }
