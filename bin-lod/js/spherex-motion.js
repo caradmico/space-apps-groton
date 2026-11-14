@@ -29,6 +29,63 @@ export const LABELS = {
   approximate: "approximate: galactic orbits not modeled",
 };
 
+
+export const IR_COLOR_CAPTION =
+  "False color: SPHEREx sees infrared light, invisible to the eye. Blue = shorter infrared, red = longer.";
+
+export const KNOWN_IR_TAGS = [
+  "blue/hot",
+  "neutral",
+  "red/cool",
+  "dusty/IR excess",
+  "insufficient data",
+];
+
+/**
+ * Return [r, g, b] in 0..1 for WebGL / canvas rendering.
+ * Never draws the script's #808080 gray: insufficient-data or missing ir_rgb
+ * keep the viewer's normal [1, 1, 1] fallback.
+ */
+export function starDisplayColor(st) {
+  if (!st || st.ir_tag === "insufficient data") return [1, 1, 1];
+  const rgb = st.ir_rgb;
+  if (
+    Array.isArray(rgb) &&
+    rgb.length === 3 &&
+    Number.isFinite(rgb[0]) &&
+    Number.isFinite(rgb[1]) &&
+    Number.isFinite(rgb[2])
+  ) {
+    return [rgb[0], rgb[1], rgb[2]];
+  }
+  if (
+    typeof st.ir_hex === "string" &&
+    /^#[0-9a-fA-F]{6}$/.test(st.ir_hex) &&
+    st.ir_hex.toLowerCase() !== "#808080"
+  ) {
+    const h = st.ir_hex.slice(1);
+    return [
+      parseInt(h.slice(0, 2), 16) / 255,
+      parseInt(h.slice(2, 4), 16) / 255,
+      parseInt(h.slice(4, 6), 16) / 255,
+    ];
+  }
+  return [1, 1, 1];
+}
+
+export function formatStarPopup(st) {
+  if (!st) return "";
+  const title = st.name || (st.gaia_id ? `Gaia DR3 ${st.gaia_id}` : "SPHEREx source");
+  const tag = st.ir_tag || "insufficient data";
+  const lines = [`${title} — IR color: ${tag}`];
+  if (st.ir_caption) lines.push(st.ir_caption);
+  if (Number.isFinite(st.gmag)) {
+    const detCount = Array.isArray(st.detections) ? st.detections.length : 0;
+    lines.push(`G = ${st.gmag.toFixed(2)} mag · ${detCount} SPHEREx det.`);
+  }
+  return lines.join("\n");
+}
+
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 
@@ -385,6 +442,8 @@ export function attachSpherexMotion({ THREE, scene, camera, controls, layerUrl, 
   let insetCtx = null;
   let sliderEl = null;
   let readoutEl = null;
+  let lastInsetProjected = [];
+  let popupEl = null;
 
   function setupDom(layerData) {
     const ctrlBar = document.querySelector(".controls");
@@ -431,6 +490,13 @@ export function attachSpherexMotion({ THREE, scene, camera, controls, layerUrl, 
         camera.position.set(x * backScale, y * backScale, z * backScale);
         controls.update?.();
       });
+
+      const captionText =
+        (layerData && layerData.meta && layerData.meta.ir_color_caption) || IR_COLOR_CAPTION;
+      const captionEl = document.createElement("div");
+      captionEl.className = "spherex-ir-caption";
+      captionEl.textContent = captionText;
+      chip.appendChild(captionEl);
     }
 
     const wrap = document.getElementById("canvas-wrap") || document.body;
@@ -441,6 +507,55 @@ export function attachSpherexMotion({ THREE, scene, camera, controls, layerUrl, 
       insetCanvas.height = 240;
       wrap.appendChild(insetCanvas);
       insetCtx = insetCanvas.getContext("2d");
+    }
+    if (wrap && !document.getElementById("spherex-star-popup")) {
+      popupEl = document.createElement("div");
+      popupEl.id = "spherex-star-popup";
+      popupEl.setAttribute("hidden", "");
+      wrap.appendChild(popupEl);
+    } else {
+      popupEl = document.getElementById("spherex-star-popup");
+    }
+
+    function showStarPopup(st) {
+      if (!popupEl) return;
+      if (!st) {
+        popupEl.textContent = "";
+        popupEl.removeAttribute("style");
+        popupEl.setAttribute("hidden", "");
+        return;
+      }
+      const [r, g, b] = starDisplayColor(st);
+      const swatchHex =
+        st.ir_tag && st.ir_tag !== "insufficient data" && st.ir_hex
+          ? st.ir_hex
+          : `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+      popupEl.textContent = formatStarPopup(st);
+      popupEl.style.borderLeft = `4px solid ${swatchHex}`;
+      popupEl.removeAttribute("hidden");
+    }
+
+    if (insetCanvas && !insetCanvas.dataset.starPopupBound) {
+      insetCanvas.dataset.starPopupBound = "1";
+      insetCanvas.addEventListener("click", (ev) => {
+        const rect = insetCanvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const cx = ((ev.clientX - rect.left) / rect.width) * insetCanvas.width;
+        const cy = ((ev.clientY - rect.top) / rect.height) * insetCanvas.height;
+        let bestStar = null;
+        let bestD2 = 16 * 16;
+        for (const item of lastInsetProjected) {
+          const dx = item.x - cx;
+          const dy = item.y - cy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 <= bestD2) {
+            bestD2 = d2;
+            bestStar = item.star;
+          }
+        }
+        ev.stopPropagation();
+        showStarPopup(bestStar);
+      });
     }
   }
 
@@ -455,7 +570,7 @@ export function attachSpherexMotion({ THREE, scene, camera, controls, layerUrl, 
     const trailColArr = new Float32Array(n * 6);
 
     for (let i = 0; i < n; i++) {
-      const rgb = stars[i].ir_rgb || [1, 1, 1];
+      const rgb = starDisplayColor(stars[i]);
       colArr[i * 3] = rgb[0];
       colArr[i * 3 + 1] = rgb[1];
       colArr[i * 3 + 2] = rgb[2];
@@ -520,7 +635,7 @@ export function attachSpherexMotion({ THREE, scene, camera, controls, layerUrl, 
         const [x1, y1, z1] = raDecDistToXYZ(p1.ra, p1.dec, p1.dist_pc);
 
         posAttr.setXYZ(i, x1, y1, z1);
-        const rgb = st.ir_rgb || [1, 1, 1];
+        const rgb = starDisplayColor(st);
         colAttr.setXYZ(i, rgb[0] * p1.alpha, rgb[1] * p1.alpha, rgb[2] * p1.alpha);
 
         trPosAttr.setXYZ(i * 2, x0, y0, z0);
@@ -580,10 +695,12 @@ export function attachSpherexMotion({ THREE, scene, camera, controls, layerUrl, 
     const halfPlot = (Math.min(W, H) - 2 * pad) / 2;
     const toPx = (dx, dy) => [W / 2 - (dx / maxSpanDeg) * halfPlot, H / 2 - (dy / maxSpanDeg) * halfPlot];
 
+    lastInsetProjected = [];
     for (const item of computed) {
       const [x0, y0] = toPx(item.dx0, item.dy0);
       const [x1, y1] = toPx(item.dx1, item.dy1);
-      const rgb = item.st.ir_rgb || [1, 1, 1];
+      lastInsetProjected.push({ x: x1, y: y1, star: item.st });
+      const rgb = starDisplayColor(item.st);
       const colStr = `rgba(${Math.round(rgb[0] * 255)},${Math.round(rgb[1] * 255)},${Math.round(rgb[2] * 255)},${item.p1.alpha.toFixed(2)})`;
 
       ctx.save();
