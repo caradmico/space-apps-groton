@@ -354,3 +354,16 @@ canvas {
   pointer-events: none;
   z-index: 12;
 }
+
+@media (max-width: 640px) {
+  #spherex-inset {
+    width: 148px;
+    height: 148px;
+    top: 0.5rem;
+    right: 0.5rem;
+    bottom: auto;
+  }
+  #canvas-wrap:has(#spherex-inset) .hud {
+    max-width: calc(100% - 10rem);
+  }
+}
