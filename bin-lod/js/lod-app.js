@@ -52,6 +52,7 @@ const SKY_RADIUS = 100;
 const DETECT_SAMPLE = 512;
 
 let closeup = null;
+let spherexMotion = null;
 
 const FAR_BUDGET = 12288;
 const NEAR_BUDGET = 12288;
@@ -1915,6 +1916,20 @@ function initScene() {
       })
       .catch((e) => console.warn("closeup failed", e));
   }
+  const params = new URLSearchParams(location.search);
+  if (params.get("spherex") === "1") {
+    import("./spherex-motion.js")
+      .then((m) => {
+        spherexMotion = m.attachSpherexMotion({
+          THREE,
+          scene,
+          camera,
+          controls,
+          layerUrl: params.get("spherexLayer"),
+        });
+      })
+      .catch((e) => console.warn("spherex failed", e));
+  }
   if (new URLSearchParams(location.search).has("debug")) {
     window.__nav = {
       camera,
@@ -2156,6 +2171,7 @@ function initScene() {
     renderer.render(scene, camera);
     trace.pointsDrawn = renderer.info.render.points;
     closeup?.render();
+    spherexMotion?.render();
     if (!trace.firstFrameMs && trace.pointsDrawn > 0) {
       trace.firstFrameMs = performance.now();
     }
